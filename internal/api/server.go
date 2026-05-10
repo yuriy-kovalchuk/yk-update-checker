@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/yuriy-kovalchuk/yk-helm-update-checker/internal/config"
+	"github.com/yuriy-kovalchuk/yk-helm-update-checker/internal/constants"
 	"github.com/yuriy-kovalchuk/yk-helm-update-checker/internal/db"
+	"github.com/yuriy-kovalchuk/yk-helm-update-checker/internal/middleware"
 	"github.com/yuriy-kovalchuk/yk-helm-update-checker/internal/trigger"
 )
 
@@ -38,12 +40,6 @@ func New(cfg *Config) *Server {
 	}
 }
 
-const (
-	maxRequestBody    = 4 << 20       // 4 MB
-	stuckScanTimeout  = 2 * time.Hour
-	stuckScanInterval = time.Minute
-)
-
 // Run starts the HTTP server and blocks until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
 	mux := http.NewServeMux()
@@ -63,12 +59,17 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("GET /health", s.health)
 	mux.HandleFunc("GET /ready", s.health)
 
+	limitedMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, constants.MaxRequestBody)
+		mux.ServeHTTP(w, r)
+	})
+
+	handler := middleware.Chain(limitedMux, middleware.Recovery, middleware.Headers, middleware.Logger)
+
 	srv := &http.Server{
-		Addr: ":" + s.port,
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
-			mux.ServeHTTP(w, r)
-		}),
+		Addr:              ":" + s.port,
+		Handler:           handler,
+		ReadHeaderTimeout: constants.ReadHeaderTimeout,
 	}
 
 	go func() {
@@ -79,12 +80,12 @@ func (s *Server) Run(ctx context.Context) error {
 	}()
 
 	go func() {
-		ticker := time.NewTicker(stuckScanInterval)
+		ticker := time.NewTicker(constants.DBStuckScanCheck)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				n, err := s.db.FailStuckScans(stuckScanTimeout)
+				n, err := s.db.FailStuckScans(constants.DBStuckScanTimeout)
 				if err != nil {
 					slog.Error("fail stuck scans", "error", err)
 				} else if n > 0 {
@@ -99,7 +100,7 @@ func (s *Server) Run(ctx context.Context) error {
 	<-ctx.Done()
 	slog.Info("shutting down api server")
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), constants.ShutdownTimeout)
 	defer cancel()
 
 	return srv.Shutdown(shutdownCtx)
@@ -117,7 +118,7 @@ func (s *Server) createScan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	trig := db.ScanTriggerManual
-	if req.Trigger == "scheduled" {
+	if req.Trigger == string(db.ScanTriggerScheduled) {
 		trig = db.ScanTriggerScheduled
 	}
 
@@ -145,8 +146,10 @@ func (s *Server) addResults(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	now := time.Now()
 	for i := range results {
 		results[i].ScanID = id
+		results[i].CheckedAt = now
 	}
 
 	if err := s.db.InsertResults(results); err != nil {
@@ -177,13 +180,13 @@ func (s *Server) updateScan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch req.Status {
-	case "completed":
+	case string(db.ScanStatusCompleted):
 		if err := s.db.CompleteScan(id, req.ResultCount); err != nil {
 			slog.Error("complete scan failed", "error", err)
 			http.Error(w, "failed to complete scan", http.StatusInternalServerError)
 			return
 		}
-	case "failed":
+	case string(db.ScanStatusFailed):
 		if err := s.db.FailScan(id, req.Error); err != nil {
 			slog.Error("fail scan failed", "error", err)
 			http.Error(w, "failed to mark scan as failed", http.StatusInternalServerError)
@@ -206,21 +209,7 @@ func (s *Server) getResults(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 
-	resp := make([]map[string]any, len(results))
-	for i, r := range results {
-		resp[i] = map[string]any{
-			"source":           r.Source,
-			"chart":            r.Chart,
-			"dependency":       r.Dependency,
-			"type":             r.Type,
-			"protocol":         r.Protocol,
-			"current_version":  r.CurrentVersion,
-			"latest_version":   r.LatestVersion,
-			"scope":            r.Scope,
-			"update_available": r.UpdateAvailable,
-		}
-	}
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusOK, results)
 }
 
 // getStatus returns current status (scanning, last scan, trigger availability).
@@ -268,34 +257,14 @@ func (s *Server) triggerScan(w http.ResponseWriter, r *http.Request) {
 
 // listScans returns recent scan history (last 20).
 func (s *Server) listScans(w http.ResponseWriter, _ *http.Request) {
-	scans, err := s.db.ListScans(5)
+	scans, err := s.db.ListScans(constants.DBListScansDefault)
 	if err != nil {
 		slog.Error("list scans failed", "error", err)
 		http.Error(w, "failed to list scans", http.StatusInternalServerError)
 		return
 	}
 
-	resp := make([]map[string]any, len(scans))
-	for i, sc := range scans {
-		m := map[string]any{
-			"id":                sc.ID,
-			"status":            string(sc.Status),
-			"trigger":           string(sc.Trigger),
-			"scope":             sc.Scope,
-			"result_count":      sc.ResultCount,
-			"updates_available": sc.UpdatesAvailable,
-			"started_at":        sc.StartedAt.UTC().Format(time.RFC3339),
-		}
-		if sc.CompletedAt != nil {
-			m["completed_at"] = sc.CompletedAt.UTC().Format(time.RFC3339)
-			m["duration_s"] = sc.CompletedAt.Sub(sc.StartedAt).Seconds()
-		}
-		if sc.ErrorMessage != "" {
-			m["error"] = sc.ErrorMessage
-		}
-		resp[i] = m
-	}
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusOK, scans)
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
@@ -309,3 +278,4 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 		slog.Error("json encode failed", "error", err)
 	}
 }
+

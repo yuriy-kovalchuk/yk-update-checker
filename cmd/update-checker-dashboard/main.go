@@ -27,7 +27,7 @@ func main() {
 	)
 	flag.Parse()
 
-	setupLogger(*verbose)
+	config.SetupLogger(*verbose)
 
 	slog.Info("update-checker-dashboard starting",
 		"version", config.Version,
@@ -73,7 +73,7 @@ func main() {
 		if resp != nil {
 			resp.Body.Close()
 		}
-		if err != nil || resp.StatusCode != http.StatusOK {
+		if err != nil || resp == nil || resp.StatusCode != http.StatusOK {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			io.WriteString(w, `{"status":"unavailable"}`)
 			return
@@ -105,10 +105,3 @@ func main() {
 	}
 }
 
-func setupLogger(verbose bool) {
-	level := slog.LevelInfo
-	if verbose {
-		level = slog.LevelDebug
-	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
-}

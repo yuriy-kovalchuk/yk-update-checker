@@ -7,38 +7,18 @@ import (
 
 // Result represents a single dependency check result.
 type Result struct {
-	ID              int64
-	ScanID          int64
-	Source          string
-	Chart           string
-	Dependency      string
-	Type            string
-	Protocol        string
-	CurrentVersion  string
-	LatestVersion   string
-	Scope           string
-	UpdateAvailable bool
-	CheckedAt       time.Time
-}
-
-// InsertResult inserts a single result for a scan.
-func (db *DB) InsertResult(r *Result) error {
-	result, err := db.conn.Exec(
-		`INSERT INTO results (scan_id, source, chart, dependency, type, protocol,
-		                      current_version, latest_version, scope, update_available, checked_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.ScanID, r.Source, r.Chart, r.Dependency, r.Type, r.Protocol,
-		r.CurrentVersion, r.LatestVersion, r.Scope, r.UpdateAvailable, r.CheckedAt,
-	)
-	if err != nil {
-		return fmt.Errorf("insert result: %w", err)
-	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return fmt.Errorf("last insert id: %w", err)
-	}
-	r.ID = id
-	return nil
+	ID              int64     `json:"-"`
+	ScanID          int64     `json:"-"`
+	Source          string    `json:"source"`
+	Chart           string    `json:"chart"`
+	Dependency      string    `json:"dependency"`
+	Type            string    `json:"type"`
+	Protocol        string    `json:"protocol"`
+	CurrentVersion  string    `json:"current_version"`
+	LatestVersion   string    `json:"latest_version"`
+	Scope           string    `json:"scope"`
+	UpdateAvailable bool      `json:"update_available"`
+	CheckedAt       time.Time `json:"-"`
 }
 
 // InsertResults inserts multiple results in a single transaction.
@@ -72,33 +52,17 @@ func (db *DB) InsertResults(results []Result) error {
 	return tx.Commit()
 }
 
-// GetResultsByScan retrieves all results for a specific scan.
-func (db *DB) GetResultsByScan(scanID int64) ([]Result, error) {
-	rows, err := db.conn.Query(
-		`SELECT id, scan_id, source, chart, dependency, type, protocol,
-		        current_version, latest_version, scope, update_available, checked_at
-		 FROM results WHERE scan_id = ? ORDER BY source, chart, dependency`,
-		scanID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("query results: %w", err)
-	}
-	defer rows.Close()
-
-	return scanResultRows(rows)
-}
-
 // GetLatestResults retrieves results from the most recent completed scan.
 func (db *DB) GetLatestResults() ([]Result, error) {
 	rows, err := db.conn.Query(
 		`SELECT r.id, r.scan_id, r.source, r.chart, r.dependency, r.type, r.protocol,
 		        r.current_version, r.latest_version, r.scope, r.update_available, r.checked_at
 		 FROM results r
-		 JOIN scans s ON r.scan_id = s.id
-		 WHERE s.status = ?
-		 ORDER BY s.started_at DESC, r.source, r.chart, r.dependency
-		 LIMIT (SELECT result_count FROM scans WHERE status = ? ORDER BY started_at DESC LIMIT 1)`,
-		ScanStatusCompleted, ScanStatusCompleted,
+		 WHERE r.scan_id = (
+		     SELECT id FROM scans WHERE status = ? ORDER BY started_at DESC LIMIT 1
+		 )
+		 ORDER BY r.source, r.chart, r.dependency`,
+		ScanStatusCompleted,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query latest results: %w", err)
@@ -108,52 +72,12 @@ func (db *DB) GetLatestResults() ([]Result, error) {
 	return scanResultRows(rows)
 }
 
-// CountUpdatesAvailable returns the number of dependencies with updates in a scan.
-func (db *DB) CountUpdatesAvailable(scanID int64) (int, error) {
-	var count int
-	err := db.conn.QueryRow(
-		`SELECT COUNT(*) FROM results WHERE scan_id = ? AND update_available = 1`,
-		scanID,
-	).Scan(&count)
-	return count, err
-}
-
-// GetResultStats returns basic statistics for a scan.
-type ResultStats struct {
-	TotalResults     int
-	UpdatesAvailable int
-	UpToDate         int
-	UniqueCharts     int
-	UniqueSources    int
-}
-
-// GetResultStats returns statistics for a scan.
-func (db *DB) GetResultStats(scanID int64) (*ResultStats, error) {
-	var stats ResultStats
-
-	err := db.conn.QueryRow(
-		`SELECT
-			COUNT(*) as total,
-			SUM(CASE WHEN update_available = 1 THEN 1 ELSE 0 END) as updates,
-			COUNT(DISTINCT chart) as charts,
-			COUNT(DISTINCT source) as sources
-		 FROM results WHERE scan_id = ?`,
-		scanID,
-	).Scan(&stats.TotalResults, &stats.UpdatesAvailable, &stats.UniqueCharts, &stats.UniqueSources)
-	if err != nil {
-		return nil, fmt.Errorf("get result stats: %w", err)
-	}
-
-	stats.UpToDate = stats.TotalResults - stats.UpdatesAvailable
-	return &stats, nil
-}
-
 func scanResultRows(rows interface {
 	Next() bool
 	Scan(dest ...any) error
 	Err() error
 }) ([]Result, error) {
-	var results []Result
+	results := make([]Result, 0)
 	for rows.Next() {
 		var r Result
 		var latest *string

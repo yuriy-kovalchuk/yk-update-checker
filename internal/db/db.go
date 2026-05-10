@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/yuriy-kovalchuk/yk-helm-update-checker/internal/constants"
 	_ "modernc.org/sqlite"
 )
 
@@ -65,14 +66,14 @@ func Open(path string) (*DB, error) {
 	}
 
 	// Open database with WAL mode for better concurrency
-	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=ON", path)
+	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=%d&_foreign_keys=ON", path, constants.DBBusyTimeout.Milliseconds())
 	conn, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 
 	// Limit connections for SQLite
-	conn.SetMaxOpenConns(1)
+	conn.SetMaxOpenConns(constants.DBMaxOpenConns)
 
 	// Run migrations
 	if _, err := conn.Exec(schema); err != nil {
@@ -87,9 +88,4 @@ func Open(path string) (*DB, error) {
 // Close closes the database connection.
 func (db *DB) Close() error {
 	return db.conn.Close()
-}
-
-// Conn returns the underlying database connection for advanced queries.
-func (db *DB) Conn() *sql.DB {
-	return db.conn
 }

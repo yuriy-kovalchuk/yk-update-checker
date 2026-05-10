@@ -58,10 +58,13 @@ jobs:
       - name: Build
         run: make build
 
-  # ── Docker: build all three images (no push) ──────────────────────────────
+  # ── Docker: build all three images (no push) + Trivy image scan ───────────
   docker:
     name: Docker build (${{ matrix.component }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     strategy:
       matrix:
         component: [api, scanner, dashboard]
@@ -77,8 +80,25 @@ jobs:
           context: .
           file: Dockerfile.${{ matrix.component }}
           push: false
+          load: true
+          tags: update-checker-${{ matrix.component }}:ci
           cache-from: type=gha,scope=${{ matrix.component }}
           cache-to: type=gha,mode=max,scope=${{ matrix.component }}
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: update-checker-${{ matrix.component }}:ci
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          category: docker-${{ matrix.component }}
 
   # ── Helm: lint + template render ──────────────────────────────────────────
   helm:
@@ -98,3 +118,27 @@ jobs:
           helm template smoke charts/yk-update-checker \
             --set scanner.config.repos[0].name=test \
             --set scanner.config.repos[0].repo=https://github.com/example/test
+
+  # ── Security: Trivy filesystem scan ───────────────────────────────────────
+  security:
+    name: Security scan (filesystem)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner (filesystem)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          format: sarif
+          output: trivy-fs-results.sarif
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-fs-results.sarif
+          category: filesystem

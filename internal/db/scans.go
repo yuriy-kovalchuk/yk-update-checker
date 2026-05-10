@@ -25,15 +25,16 @@ const (
 
 // Scan represents a scan execution record.
 type Scan struct {
-	ID               int64
-	StartedAt        time.Time
-	CompletedAt      *time.Time
-	Status           ScanStatus
-	ErrorMessage     string
-	ResultCount      int
-	UpdatesAvailable int
-	Scope            string
-	Trigger          ScanTrigger
+	ID               int64       `json:"id"`
+	StartedAt        time.Time   `json:"started_at"`
+	CompletedAt      *time.Time  `json:"completed_at,omitempty"`
+	Status           ScanStatus  `json:"status"`
+	ErrorMessage     string      `json:"error,omitempty"`
+	ResultCount      int         `json:"result_count"`
+	UpdatesAvailable int         `json:"updates_available"`
+	Scope            string      `json:"scope"`
+	Trigger          ScanTrigger `json:"trigger"`
+	DurationSeconds  *float64    `json:"duration_s,omitempty"`
 }
 
 // CreateScan creates a new scan record with status "running".
@@ -66,32 +67,6 @@ func (db *DB) FailScan(scanID int64, errMsg string) error {
 	return err
 }
 
-// GetScan retrieves a scan by ID.
-func (db *DB) GetScan(scanID int64) (*Scan, error) {
-	var s Scan
-	var completedAt sql.NullTime
-	var errMsg sql.NullString
-
-	err := db.conn.QueryRow(
-		`SELECT id, started_at, completed_at, status, error_message, result_count, scope, trigger
-		 FROM scans WHERE id = ?`,
-		scanID,
-	).Scan(&s.ID, &s.StartedAt, &completedAt, &s.Status, &errMsg, &s.ResultCount, &s.Scope, &s.Trigger)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get scan: %w", err)
-	}
-
-	if completedAt.Valid {
-		s.CompletedAt = &completedAt.Time
-	}
-	s.ErrorMessage = errMsg.String
-
-	return &s, nil
-}
-
 // ListScans returns scans ordered by started_at descending, with updates_available
 // computed from the results table. Pass limit <= 0 for no limit.
 func (db *DB) ListScans(limit int) ([]Scan, error) {
@@ -112,7 +87,7 @@ func (db *DB) ListScans(limit int) ([]Scan, error) {
 	}
 	defer rows.Close()
 
-	var scans []Scan
+	scans := make([]Scan, 0)
 	for rows.Next() {
 		var s Scan
 		var completedAt sql.NullTime
@@ -125,6 +100,8 @@ func (db *DB) ListScans(limit int) ([]Scan, error) {
 
 		if completedAt.Valid {
 			s.CompletedAt = &completedAt.Time
+			d := completedAt.Time.Sub(s.StartedAt).Seconds()
+			s.DurationSeconds = &d
 		}
 		s.ErrorMessage = errMsg.String
 
@@ -148,27 +125,40 @@ func (db *DB) LatestScan() (*Scan, error) {
 
 // LatestCompletedScan returns the most recent completed scan or nil if none exist.
 func (db *DB) LatestCompletedScan() (*Scan, error) {
+	rows, err := db.conn.Query(
+		`SELECT s.id, s.started_at, s.completed_at, s.status, s.error_message,
+		        s.result_count, s.scope, s.trigger,
+		        COALESCE(SUM(r.update_available), 0) AS updates_available
+		 FROM scans s
+		 LEFT JOIN results r ON r.scan_id = s.id
+		 WHERE s.status = ?
+		 GROUP BY s.id
+		 ORDER BY s.started_at DESC
+		 LIMIT 1`,
+		ScanStatusCompleted,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get latest completed scan: %w", err)
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		return nil, rows.Err()
+	}
+
 	var s Scan
 	var completedAt sql.NullTime
 	var errMsg sql.NullString
-
-	err := db.conn.QueryRow(
-		`SELECT id, started_at, completed_at, status, error_message, result_count, scope, trigger
-		 FROM scans WHERE status = ? ORDER BY started_at DESC LIMIT 1`,
-		ScanStatusCompleted,
-	).Scan(&s.ID, &s.StartedAt, &completedAt, &s.Status, &errMsg, &s.ResultCount, &s.Scope, &s.Trigger)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get latest completed scan: %w", err)
+	if err := rows.Scan(&s.ID, &s.StartedAt, &completedAt, &s.Status, &errMsg,
+		&s.ResultCount, &s.Scope, &s.Trigger, &s.UpdatesAvailable); err != nil {
+		return nil, fmt.Errorf("scan row: %w", err)
 	}
-
 	if completedAt.Valid {
 		s.CompletedAt = &completedAt.Time
+		d := completedAt.Time.Sub(s.StartedAt).Seconds()
+		s.DurationSeconds = &d
 	}
 	s.ErrorMessage = errMsg.String
-
 	return &s, nil
 }
 
@@ -200,8 +190,6 @@ func (db *DB) FailStuckScans(olderThan time.Duration) (int64, error) {
 // DeleteOldScans removes scans older than the given duration, keeping at least minKeep scans.
 func (db *DB) DeleteOldScans(olderThan time.Duration, minKeep int) (int64, error) {
 	cutoff := time.Now().Add(-olderThan)
-
-	// Get IDs of scans to keep (most recent minKeep)
 	result, err := db.conn.Exec(
 		`DELETE FROM scans WHERE started_at < ? AND id NOT IN (
 			SELECT id FROM scans ORDER BY started_at DESC LIMIT ?
@@ -211,6 +199,5 @@ func (db *DB) DeleteOldScans(olderThan time.Duration, minKeep int) (int64, error
 	if err != nil {
 		return 0, fmt.Errorf("delete old scans: %w", err)
 	}
-
 	return result.RowsAffected()
 }

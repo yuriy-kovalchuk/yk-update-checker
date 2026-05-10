@@ -1,0 +1,51 @@
+#!/bin/sh
+# Pre-push hook: enforces conventional commits to master,
+# validates v* tag format, and runs the test suite.
+
+set -e
+
+CONVENTIONAL_RE='^(feat|fix|docs|style|refactor|test|chore|build|ci|perf|revert)(\([^)]+\))?(!)?: .+'
+MERGE_RE='^Merge '
+
+check_commits() {
+  range="$1"
+  tmpfile=$(mktemp)
+  git log --format='%s' "$range" 2>/dev/null > "$tmpfile"
+  while IFS= read -r msg; do
+    [ -z "$msg" ] && continue
+    if ! printf '%s' "$msg" | grep -qE "$CONVENTIONAL_RE" &&
+       ! printf '%s' "$msg" | grep -qE "$MERGE_RE"; then
+      printf 'ERROR: non-conventional commit message:\n  %s\n' "$msg" >&2
+      printf 'Format: type(scope): description\n' >&2
+      printf 'Types:  feat|fix|docs|style|refactor|test|chore|build|ci|perf|revert\n' >&2
+      rm -f "$tmpfile"
+      exit 1
+    fi
+  done < "$tmpfile"
+  rm -f "$tmpfile"
+}
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$local_ref" in
+    refs/tags/*)
+      tag="${local_ref#refs/tags/}"
+      if ! printf '%s' "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+        printf 'ERROR: invalid tag format "%s"\n' "$tag" >&2
+        printf 'Expected: v<major>.<minor>.<patch>[-prerelease]\n' >&2
+        exit 1
+      fi
+      ;;
+    refs/heads/master)
+      if [ "$remote_sha" = '0000000000000000000000000000000000000000' ]; then
+        range="$local_sha"
+      else
+        range="$remote_sha..$local_sha"
+      fi
+      check_commits "$range"
+      ;;
+  esac
+done
+
+printf '==> running tests...\n'
+go test -race -timeout 120s ./...
+printf '==> pre-push checks passed\n'

@@ -1,9 +1,12 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"time"
 
+	"github.com/yuriy-kovalchuk/yk-helm-update-checker/internal/constants"
+	"github.com/yuriy-kovalchuk/yk-helm-update-checker/internal/types"
 	"gopkg.in/yaml.v3"
 )
 
@@ -14,24 +17,11 @@ var (
 	BuildDate = "unknown"
 )
 
-// RepoAuth holds credentials for a single repository.
-// Type selects the mechanism: "token", "basic", or "ssh".
-// File variants (TokenFile, PasswordFile) point to files mounted from Secrets.
-type RepoAuth struct {
-	Type         string `yaml:"type"`
-	Token        string `yaml:"token"`
-	TokenFile    string `yaml:"token_file"`
-	Username     string `yaml:"username"`
-	Password     string `yaml:"password"`
-	PasswordFile string `yaml:"password_file"`
-	SSHKeyPath   string `yaml:"ssh_key_path"`
-}
-
 type Repo struct {
-	Name string   `yaml:"name"`
-	URL  string   `yaml:"repo"`
-	Path string   `yaml:"path"`
-	Auth RepoAuth `yaml:"auth"`
+	Name string        `yaml:"name"`
+	URL  string        `yaml:"repo"`
+	Path string        `yaml:"path"`
+	Auth types.RepoAuth `yaml:"auth"`
 }
 
 type Config struct {
@@ -42,6 +32,15 @@ type Config struct {
 	ScanInterval   time.Duration `yaml:"scan_interval"`
 	StartupScan    bool          `yaml:"startup_scan"`
 	StartupDelay   time.Duration `yaml:"startup_delay"`
+}
+
+// SetupLogger configures the default slog handler based on the verbose flag.
+func SetupLogger(verbose bool) {
+	level := slog.LevelInfo
+	if verbose {
+		level = slog.LevelDebug
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 }
 
 func Load(path string) (*Config, error) {
@@ -57,7 +56,7 @@ func Load(path string) (*Config, error) {
 		cfg.UpdateType = "all"
 	}
 	if cfg.ParallelChecks <= 0 {
-		cfg.ParallelChecks = 5
+		cfg.ParallelChecks = constants.DefaultParallelChecks
 	}
 	return &cfg, nil
 }

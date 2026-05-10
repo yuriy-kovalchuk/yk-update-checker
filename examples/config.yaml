@@ -1,0 +1,9 @@
+update_type: all
+
+# Maximum concurrent registry version lookups per scan.
+parallel_checks: 5
+
+repos:
+  # Public repository — no auth required
+  - name: homelab
+    repo: https://github.com/yuriy-kovalchuk/homelab

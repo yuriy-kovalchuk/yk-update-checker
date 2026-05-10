@@ -1,5 +1,6 @@
-.PHONY: build run run-api run-scanner run-dashboard lint fmt vet tidy test test-cover docker-build docker-push clean help
+.PHONY: build run run-api run-scanner run-dashboard lint fmt vet tidy deps-check install-hooks test test-cover docker-build docker-push clean help
 
+CONFIG     ?= examples/config.yaml
 IMAGE      ?= ghcr.io/yuriy-kovalchuk
 VERSION    ?= dev
 COMMIT     := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -25,7 +26,7 @@ run-api: build
 
 ## run-scanner: run the scanner (requires API to be running)
 run-scanner: build
-	./bin/update-checker-scanner -api-url http://localhost:8080 -config config.yaml
+	./bin/update-checker-scanner -api-url http://localhost:8080 -config $(CONFIG)
 
 ## run-dashboard: run the dashboard (requires API to be running)
 run-dashboard: build
@@ -47,6 +48,16 @@ vet:
 tidy:
 	go mod tidy
 	go mod verify
+
+## deps-check: list outdated direct dependencies (requires jq)
+deps-check:
+	go list -u -m -json all 2>/dev/null | jq -r 'select(.Update) | "\(.Path): \(.Version) → \(.Update.Version)"'
+
+## install-hooks: configure git to use .githooks/
+install-hooks:
+	git config core.hooksPath .githooks
+	chmod +x .githooks/*
+	@echo "Git hooks installed."
 
 ## test: run all tests
 test:
