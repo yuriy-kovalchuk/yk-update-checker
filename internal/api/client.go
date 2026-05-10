@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
 
+	"github.com/yuriy-kovalchuk/yk-helm-update-checker/internal/constants"
 	"github.com/yuriy-kovalchuk/yk-helm-update-checker/internal/db"
 )
 
@@ -23,17 +23,20 @@ func NewClient(baseURL string) *Client {
 	return &Client{
 		baseURL: baseURL,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: constants.HTTPClientTimeout,
 		},
 	}
 }
 
 // CreateScan creates a new scan record and returns the scan ID.
 func (c *Client) CreateScan(ctx context.Context, scope, trigger string) (int64, error) {
-	body, _ := json.Marshal(map[string]string{
+	body, err := json.Marshal(map[string]string{
 		"scope":   scope,
 		"trigger": trigger,
 	})
+	if err != nil {
+		return 0, fmt.Errorf("marshal request: %w", err)
+	}
 
 	resp, err := c.do(ctx, http.MethodPost, "/api/scans", body)
 	if err != nil {
@@ -57,7 +60,10 @@ func (c *Client) CreateScan(ctx context.Context, scope, trigger string) (int64, 
 
 // AddResults adds results to a scan.
 func (c *Client) AddResults(ctx context.Context, scanID int64, results []db.Result) error {
-	body, _ := json.Marshal(results)
+	body, err := json.Marshal(results)
+	if err != nil {
+		return fmt.Errorf("marshal results: %w", err)
+	}
 
 	resp, err := c.do(ctx, http.MethodPost, fmt.Sprintf("/api/scans/%d/results", scanID), body)
 	if err != nil {
@@ -75,10 +81,13 @@ func (c *Client) AddResults(ctx context.Context, scanID int64, results []db.Resu
 
 // CompleteScan marks a scan as completed.
 func (c *Client) CompleteScan(ctx context.Context, scanID int64, resultCount int) error {
-	body, _ := json.Marshal(map[string]any{
+	body, err := json.Marshal(map[string]any{
 		"status":       "completed",
 		"result_count": resultCount,
 	})
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
 
 	resp, err := c.do(ctx, http.MethodPatch, fmt.Sprintf("/api/scans/%d", scanID), body)
 	if err != nil {
@@ -95,10 +104,13 @@ func (c *Client) CompleteScan(ctx context.Context, scanID int64, resultCount int
 
 // FailScan marks a scan as failed.
 func (c *Client) FailScan(ctx context.Context, scanID int64, errMsg string) error {
-	body, _ := json.Marshal(map[string]string{
+	body, err := json.Marshal(map[string]string{
 		"status": "failed",
 		"error":  errMsg,
 	})
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
 
 	resp, err := c.do(ctx, http.MethodPatch, fmt.Sprintf("/api/scans/%d", scanID), body)
 	if err != nil {

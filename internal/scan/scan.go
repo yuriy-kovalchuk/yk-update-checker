@@ -16,6 +16,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/yuriy-kovalchuk/yk-helm-update-checker/internal/extractor"
+	"github.com/yuriy-kovalchuk/yk-helm-update-checker/internal/types"
 	"github.com/yuriy-kovalchuk/yk-helm-update-checker/internal/version"
 )
 
@@ -23,44 +24,16 @@ import (
 // Result
 // ============================================================================
 
-// Result is one dependency check outcome, matching the UI columns:
-// SOURCE | CHART | DEPENDENCY | TYPE | PROTOCOL | CURRENT | LATEST STABLE | SCOPE
-type Result struct {
-	Source          string    `json:"source"`
-	Chart           string    `json:"chart"`
-	Dependency      string    `json:"dependency"`
-	Type            string    `json:"type"`
-	Protocol        string    `json:"protocol"`
-	CurrentVersion  string    `json:"current_version"`
-	LatestVersion   string    `json:"latest_version"`
-	Scope           string    `json:"scope"`
-	UpdateAvailable bool      `json:"update_available"`
-	CheckedAt       time.Time `json:"checked_at"`
-}
+// Result is an alias to the shared types.Result
+type Result = types.Result
 
-// ============================================================================
-// RepoTarget and Authentication
-// ============================================================================
-
-// RepoAuth holds credentials for a repository.
-// Type selects the mechanism: "token", "basic", or "ssh".
-// File variants (TokenFile, PasswordFile) point to files mounted from Secrets.
-type RepoAuth struct {
-	Type         string
-	Token        string
-	TokenFile    string
-	Username     string
-	Password     string
-	PasswordFile string
-	SSHKeyPath   string
-}
-
-// RepoTarget is a repository to scan with an optional sub-path and auth.
+// RepoTarget is a repository to scan.
+// Uses types.RepoAuth for credentials.
 type RepoTarget struct {
 	Name string
 	URL  string
 	Path string
-	Auth RepoAuth
+	Auth types.RepoAuth
 }
 
 // cloneURL returns the repository URL with credentials embedded for HTTPS
@@ -156,7 +129,7 @@ func (r *Runner) Run(ctx context.Context) ([]Result, error) {
 		mu      sync.Mutex
 	)
 
-	runConcurrent(ctx, r.repos, 5, func(ctx context.Context, rt RepoTarget) {
+	runConcurrent(ctx, r.repos, r.parallelChecks, func(ctx context.Context, rt RepoTarget) {
 		dest := filepath.Join(workDir, safeName(rt.Name))
 		slog.Info("syncing repo", "name", rt.Name, "url", rt.URL)
 

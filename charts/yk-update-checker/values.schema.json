@@ -1,0 +1,274 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "api": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "image": { "$ref": "#/$defs/image" },
+        "replicaCount": { "type": "integer", "minimum": 1 },
+        "verbose": { "type": "boolean" },
+        "enableTrigger": { "type": "boolean" },
+        "persistence": { "$ref": "#/$defs/persistence" },
+        "databasePath": { "type": "string" },
+        "resources": { "$ref": "#/$defs/resources" },
+        "livenessProbe": { "$ref": "#/$defs/httpProbe" },
+        "readinessProbe": { "$ref": "#/$defs/httpProbe" },
+        "extraArgs": { "type": "array", "items": { "type": "string" } },
+        "extraEnv": { "$ref": "#/$defs/envVars" }
+      }
+    },
+    "scanner": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "image": { "$ref": "#/$defs/image" },
+        "schedule": { "type": "string" },
+        "verbose": { "type": "boolean" },
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "updateType": {
+              "type": "string",
+              "enum": ["all", "major", "minor", "patch"]
+            },
+            "parallelChecks": { "type": "integer", "minimum": 1 },
+            "repos": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/repo" }
+            }
+          }
+        },
+        "cronjob": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "successfulJobsHistoryLimit": { "type": "integer", "minimum": 0 },
+            "failedJobsHistoryLimit": { "type": "integer", "minimum": 0 },
+            "concurrencyPolicy": {
+              "type": "string",
+              "enum": ["Allow", "Forbid", "Replace"]
+            },
+            "ttlSecondsAfterFinished": { "type": "integer", "minimum": 0 },
+            "restartPolicy": {
+              "type": "string",
+              "enum": ["Never", "OnFailure"]
+            },
+            "backoffLimit": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "resources": { "$ref": "#/$defs/resources" },
+        "gitCacheDir": { "type": "string" },
+        "extraVolumes": { "type": "array" },
+        "extraVolumeMounts": { "type": "array" },
+        "extraArgs": { "type": "array", "items": { "type": "string" } },
+        "extraEnv": { "$ref": "#/$defs/envVars" }
+      }
+    },
+    "dashboard": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "$ref": "#/$defs/image" },
+        "replicaCount": { "type": "integer", "minimum": 1 },
+        "verbose": { "type": "boolean" },
+        "service": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["ClusterIP", "NodePort", "LoadBalancer"]
+            },
+            "port": { "type": "integer" },
+            "annotations": { "type": "object" }
+          }
+        },
+        "ingress": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "className": { "type": "string" },
+            "annotations": { "type": "object" },
+            "hosts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "host": { "type": "string" },
+                  "paths": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": { "type": "string" },
+                        "pathType": {
+                          "type": "string",
+                          "enum": ["Prefix", "Exact", "ImplementationSpecific"]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "tls": { "type": "array" }
+          }
+        },
+        "autoscaling": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "minReplicas": { "type": "integer", "minimum": 1 },
+            "maxReplicas": { "type": "integer", "minimum": 1 },
+            "targetCPUUtilizationPercentage": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        },
+        "pdb": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "minAvailable": { "type": ["integer", "string"] }
+          }
+        },
+        "resources": { "$ref": "#/$defs/resources" },
+        "livenessProbe": { "$ref": "#/$defs/httpProbe" },
+        "readinessProbe": { "$ref": "#/$defs/httpProbe" },
+        "extraArgs": { "type": "array", "items": { "type": "string" } },
+        "extraEnv": { "$ref": "#/$defs/envVars" }
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": { "type": "boolean" },
+        "automount": { "type": "boolean" },
+        "annotations": { "type": "object" },
+        "name": { "type": "string" }
+      }
+    },
+    "podAnnotations": { "type": "object" },
+    "podLabels": { "type": "object" },
+    "podSecurityContext": { "type": "object" },
+    "securityContext": { "type": "object" },
+    "nodeSelector": { "type": "object" },
+    "tolerations": { "type": "array" },
+    "affinity": { "type": "object" },
+    "extraEnv": { "$ref": "#/$defs/envVars" }
+  },
+  "$defs": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": { "type": "string" },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        },
+        "tag": { "type": "string" }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "existingClaim": { "type": "string" },
+        "storageClass": { "type": "string" },
+        "accessMode": {
+          "type": "string",
+          "enum": ["ReadWriteOnce", "ReadWriteMany", "ReadOnlyMany"]
+        },
+        "size": { "type": "string" }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requests": {
+          "type": "object",
+          "properties": {
+            "cpu": { "type": "string" },
+            "memory": { "type": "string" }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "cpu": { "type": "string" },
+            "memory": { "type": "string" }
+          }
+        }
+      }
+    },
+    "httpProbe": {
+      "type": "object",
+      "properties": {
+        "httpGet": {
+          "type": "object",
+          "properties": {
+            "path": { "type": "string" },
+            "port": { "type": ["string", "integer"] }
+          }
+        },
+        "initialDelaySeconds": { "type": "integer", "minimum": 0 },
+        "periodSeconds": { "type": "integer", "minimum": 1 },
+        "failureThreshold": { "type": "integer", "minimum": 1 },
+        "timeoutSeconds": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "envVars": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string" },
+          "value": { "type": "string" },
+          "valueFrom": { "type": "object" }
+        }
+      }
+    },
+    "repo": {
+      "type": "object",
+      "required": ["name", "repo"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "repo": { "type": "string" },
+        "path": { "type": "string" },
+        "auth": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["token", "basic", "ssh"]
+            },
+            "existingSecret": { "type": "string" },
+            "existingSecretKey": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

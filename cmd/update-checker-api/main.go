@@ -32,7 +32,7 @@ func run() error {
 	)
 	flag.Parse()
 
-	setupLogger(*verbose)
+	config.SetupLogger(*verbose)
 
 	slog.Info("update-checker-api starting",
 		"version", config.Version,
@@ -64,10 +64,3 @@ func run() error {
 	return srv.Run(ctx)
 }
 
-func setupLogger(verbose bool) {
-	level := slog.LevelInfo
-	if verbose {
-		level = slog.LevelDebug
-	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
-}

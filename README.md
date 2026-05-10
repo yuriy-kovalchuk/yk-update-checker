@@ -102,12 +102,10 @@ extraEnv: []
 ```bash
 make build          # compile all three binaries to bin/
 make test           # run tests with race detector
-
-# Run locally (three terminals)
-make run-api
-make run-scanner    # reads config.yaml, posts to localhost:8080
-make run-dashboard  # serves UI at localhost:8081
+make help           # list all available targets
 ```
+
+See [docs/local-testing.md](docs/local-testing.md) for a full local setup guide and [docs/architecture.md](docs/architecture.md) for component internals.
 
 Releases are triggered by pushing a `v*` tag. CI builds and pushes all three Docker images and the Helm chart to GHCR.
 

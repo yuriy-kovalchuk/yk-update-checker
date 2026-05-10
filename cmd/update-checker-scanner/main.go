@@ -28,7 +28,7 @@ func main() {
 	)
 	flag.Parse()
 
-	setupLogger(*verbose)
+	config.SetupLogger(*verbose)
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -86,20 +86,7 @@ func runScan(ctx context.Context, cfg *config.Config, apiURL, trigger, cacheDir 
 	// Convert and store results
 	dbResults := make([]db.Result, len(results))
 	for i, r := range results {
-		dbResults[i] = db.Result{
-			ScanID:          scanID,
-			Source:          r.Source,
-			Chart:           r.Chart,
-			Dependency:      r.Dependency,
-			Type:            r.Type,
-			Protocol:        r.Protocol,
-			CurrentVersion:  r.CurrentVersion,
-			LatestVersion:   r.LatestVersion,
-			Scope:           r.Scope,
-			UpdateAvailable: r.UpdateAvailable,
-			CheckedAt:       r.CheckedAt,
-		}
-
+		dbResults[i] = toDBResult(scanID, r)
 	}
 
 	if err := client.AddResults(ctx, scanID, dbResults); err != nil {
@@ -124,15 +111,7 @@ func convertRepos(repos []config.Repo) []scan.RepoTarget {
 			Name: r.Name,
 			URL:  r.URL,
 			Path: r.Path,
-			Auth: scan.RepoAuth{
-				Type:         r.Auth.Type,
-				Token:        r.Auth.Token,
-				TokenFile:    r.Auth.TokenFile,
-				Username:     r.Auth.Username,
-				Password:     r.Auth.Password,
-				PasswordFile: r.Auth.PasswordFile,
-				SSHKeyPath:   r.Auth.SSHKeyPath,
-			},
+			Auth: r.Auth,
 		}
 	}
 	return targets
@@ -145,10 +124,19 @@ func triggerDefault() string {
 	return "scheduled"
 }
 
-func setupLogger(verbose bool) {
-	level := slog.LevelInfo
-	if verbose {
-		level = slog.LevelDebug
+func toDBResult(scanID int64, r scan.Result) db.Result {
+	return db.Result{
+		ScanID:          scanID,
+		Source:          r.Source,
+		Chart:           r.Chart,
+		Dependency:      r.Dependency,
+		Type:            r.Type,
+		Protocol:        r.Protocol,
+		CurrentVersion:  r.CurrentVersion,
+		LatestVersion:   r.LatestVersion,
+		Scope:           r.Scope,
+		UpdateAvailable: r.UpdateAvailable,
+		CheckedAt:       r.CheckedAt,
 	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 }
+

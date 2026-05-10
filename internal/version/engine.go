@@ -7,30 +7,33 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/yuriy-kovalchuk/yk-helm-update-checker/internal/constants"
 	"gopkg.in/yaml.v3"
 )
 
 type Scope string
 
 const (
-	ScopeAll   Scope = "all"
+	ScopeAll Scope = "all"
 	ScopeMajor Scope = "major"
 	ScopeMinor Scope = "minor"
 	ScopePatch Scope = "patch"
 )
 
+var validScopes = map[Scope]bool{
+	ScopeAll:   true,
+	ScopeMajor: true,
+	ScopeMinor: true,
+	ScopePatch: true,
+}
+
 func (s Scope) IsValid() bool {
-	switch s {
-	case ScopeAll, ScopeMajor, ScopeMinor, ScopePatch:
-		return true
-	}
-	return false
+	return validScopes[s]
 }
 
 // ParseScope converts a string to a Scope, falling back to ScopeAll for
@@ -47,7 +50,7 @@ func ParseScope(s string) Scope {
 // httpClient is shared across all version checks. The 30-second timeout
 // prevents a slow or unresponsive registry from stalling a goroutine
 // indefinitely.
-var httpClient = &http.Client{Timeout: 30 * time.Second}
+var httpClient = &http.Client{Timeout: constants.HTTPClientTimeout}
 
 // IndexCache stores parsed Helm index.yaml responses for the duration of a
 // scan so that charts sharing a registry avoid redundant HTTP fetches.

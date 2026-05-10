@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -57,7 +58,7 @@ func NewKubernetesTrigger(cronJobName string) *KubernetesTrigger {
 	}
 
 	kt.client = client
-	kt.namespace = string(nsBytes)
+	kt.namespace = strings.TrimSpace(string(nsBytes))
 	kt.available = true
 
 	slog.Info("kubernetes trigger initialized",
