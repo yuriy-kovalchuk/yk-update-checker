@@ -2,8 +2,8 @@ apiVersion: v2
 name: yk-update-checker
 description: Scans Helm and FluxCD GitOps repositories for chart updates and exposes results via a Material Design web UI.
 type: application
-version: 0.3.0
-appVersion: "0.3.0"
+version: 0.1.0
+appVersion: "0.1.0"
 keywords:
   - helm
   - fluxcd

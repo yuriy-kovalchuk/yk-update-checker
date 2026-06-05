@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.1-alpha] - 2026-06-05
+
+### Changed
+- **Helm chart**: added Kyverno-compliant security contexts — `runAsNonRoot`, `seccompProfile: RuntimeDefault` at pod level; `allowPrivilegeEscalation: false`, `readOnlyRootFilesystem: true`, `capabilities.drop: ALL` at container level
+- **Helm chart**: split security contexts into independent Deployment and CronJob settings for per-workload overrides
+- **Helm chart**: added emptyDir volume (`/tmp`) to scanner CronJob for git cache write access, defaulted `git_cache_dir: /tmp/git-cache`
+- **Dockerfile**: switched runtime base from `distroless/static` to `alpine/git:v2.52.0` so the `scan` subcommand has `git` available in the container
+
 ## [0.1.0-alpha] - 2026-06-05
 
 ### Added

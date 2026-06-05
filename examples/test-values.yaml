@@ -1,6 +1,6 @@
 # Test values for yk-update-checker
 image:
-  tag: "0.1.0-alpha"          # defaults to .Chart.AppVersion
+  tag: "0.1.1-alpha-dev"          # defaults to .Chart.AppVersion
 scanner:
   config:
     update_type: all          # all | major | minor | patch
