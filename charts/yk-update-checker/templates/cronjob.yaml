@@ -19,6 +19,8 @@ spec:
             {{- include "yk-update-checker.selectorLabels" . | nindent 12 }}
             app.kubernetes.io/component: scanner
         spec:
+          securityContext:
+            {{- toYaml .Values.scanner.podSecurityContext | nindent 12 }}
           restartPolicy: Never
           serviceAccountName: {{ include "yk-update-checker.serviceAccountName" . }}
           containers:
@@ -33,15 +35,21 @@ spec:
                 - name: config
                   mountPath: /etc/update-checker
                   readOnly: true
+                - name: scanner-tmp
+                  mountPath: /tmp
               env:
                 - name: SCAN_TRIGGER
                   value: scheduled
                 {{- with .Values.scanner.extraEnv }}
                 {{- toYaml . | nindent 16 }}
                 {{- end }}
+              securityContext:
+                {{- toYaml .Values.scanner.containerSecurityContext | nindent 16 }}
               resources:
                 {{- toYaml .Values.scanner.resources | nindent 16 }}
           volumes:
             - name: config
               configMap:
                 name: {{ include "yk-update-checker.fullname" . }}-config
+            - name: scanner-tmp
+              emptyDir: {}
