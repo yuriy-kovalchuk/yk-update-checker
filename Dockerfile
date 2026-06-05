@@ -31,7 +31,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
       -o /update-checker ./cmd/update-checker
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
-FROM gcr.io/distroless/static:nonroot@sha256:dfadf31470f770fcabd48903762dce126958e98d1ce320acf1216bbfaa42d79c
+FROM gcr.io/distroless/static:nonroot@sha256:6706c73aae2afaa8201d63cc3dda48753c09bcd6c300762251065c0f7e602b8e
 
 LABEL org.opencontainers.image.title="yk-update-checker" \
       org.opencontainers.image.description="Scans GitOps repos for outdated Helm chart and FluxCD dependencies" \
