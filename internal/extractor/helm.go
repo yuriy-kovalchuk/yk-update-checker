@@ -21,18 +21,23 @@ type chartManifest struct {
 // HelmChart extracts dependencies from Helm Chart.yaml files.
 type HelmChart struct{}
 
+// NewHelmChart creates a new HelmChart extractor.
 func NewHelmChart() *HelmChart { return &HelmChart{} }
 
+// Type returns "helm".
 func (*HelmChart) Type() string { return "helm" }
 
+// Match reports whether the file is a Chart.yaml.
 func (*HelmChart) Match(path string, _ []byte) bool {
 	return strings.EqualFold(filepath.Base(path), "Chart.yaml")
 }
 
+// PrepareFile is a no-op for HelmChart; cross-file preparation is not needed.
 func (*HelmChart) PrepareFile(_ string, _ []byte) error {
 	return nil // HelmChart doesn't need cross-file preparation
 }
 
+// Extract parses a Chart.yaml and returns its name and dependency chart refs.
 func (*HelmChart) Extract(_ string, content []byte) (string, []ChartRef, error) {
 	var chart chartManifest
 	if err := yaml.Unmarshal(content, &chart); err != nil {

@@ -1,9 +1,8 @@
-{{- if .Values.api.enableTrigger }}
+{{- if .Values.rbac.create }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "yk-update-checker.fullname" . }}-job-creator
-  namespace: {{ .Release.Namespace }}
+  name: {{ include "yk-update-checker.fullname" . }}
   labels:
     {{- include "yk-update-checker.labels" . | nindent 4 }}
 rules:

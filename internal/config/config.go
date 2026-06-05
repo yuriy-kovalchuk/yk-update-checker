@@ -1,40 +1,45 @@
+// Package config loads and validates the application configuration.
 package config
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
-	"time"
 
-	"github.com/yuriy-kovalchuk/yk-helm-update-checker/internal/constants"
-	"github.com/yuriy-kovalchuk/yk-helm-update-checker/internal/types"
 	"gopkg.in/yaml.v3"
 )
 
-// Build metadata — set via -ldflags at build time.
-var (
-	Version   = "dev"
-	Commit    = "none"
-	BuildDate = "unknown"
-)
+// DefaultParallelChecks is the default number of concurrent version checks.
+const DefaultParallelChecks = 5
 
+// RepoAuth holds credentials for a repository.
+type RepoAuth struct {
+	Type         string `yaml:"type"`
+	Token        string `yaml:"token"`
+	TokenFile    string `yaml:"token_file"`
+	Username     string `yaml:"username"`
+	Password     string `yaml:"password"`
+	PasswordFile string `yaml:"password_file"`
+	SSHKeyPath   string `yaml:"ssh_key_path"`
+}
+
+// Repo is a single GitOps repository to scan.
 type Repo struct {
-	Name string        `yaml:"name"`
-	URL  string        `yaml:"repo"`
-	Path string        `yaml:"path"`
-	Auth types.RepoAuth `yaml:"auth"`
+	Name string   `yaml:"name"`
+	URL  string   `yaml:"repo"`
+	Path string   `yaml:"path"`
+	Auth RepoAuth `yaml:"auth"`
 }
 
+// Config is loaded from the YAML config file.
 type Config struct {
-	Repos          []Repo        `yaml:"repos"`
-	UpdateType     string        `yaml:"update_type"`
-	ParallelChecks int           `yaml:"parallel_checks"`
-	GitCacheDir    string        `yaml:"git_cache_dir"`
-	ScanInterval   time.Duration `yaml:"scan_interval"`
-	StartupScan    bool          `yaml:"startup_scan"`
-	StartupDelay   time.Duration `yaml:"startup_delay"`
+	Repos          []Repo `yaml:"repos"`
+	UpdateType     string `yaml:"update_type"` // all | major | minor | patch
+	ParallelChecks int    `yaml:"parallel_checks"`
+	GitCacheDir    string `yaml:"git_cache_dir"`
 }
 
-// SetupLogger configures the default slog handler based on the verbose flag.
+// SetupLogger configures the default slog handler.
 func SetupLogger(verbose bool) {
 	level := slog.LevelInfo
 	if verbose {
@@ -43,6 +48,7 @@ func SetupLogger(verbose bool) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 }
 
+// Load reads and parses a YAML config file.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -52,11 +58,14 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
+	if len(cfg.Repos) == 0 {
+		return nil, fmt.Errorf("config: at least one repo is required")
+	}
 	if cfg.UpdateType == "" {
 		cfg.UpdateType = "all"
 	}
 	if cfg.ParallelChecks <= 0 {
-		cfg.ParallelChecks = constants.DefaultParallelChecks
+		cfg.ParallelChecks = DefaultParallelChecks
 	}
 	return &cfg, nil
 }

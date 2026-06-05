@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Helm Update Checker</title>
+  <title>Update Checker</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'%3E%3Cpath d='M12 2L2 7l10 5 10-5-10-5z' stroke='%2358a6ff' stroke-width='1.5' stroke-linejoin='round'/%3E%3Cpath d='M2 17l10 5 10-5' stroke='%2358a6ff' stroke-width='1.5' stroke-linejoin='round'/%3E%3Cpath d='M2 12l10 5 10-5' stroke='%2358a6ff' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E">
   <style>
     :root {
@@ -209,10 +209,7 @@
 
     thead th:hover { color: var(--text); }
 
-    tbody tr {
-      border-bottom: 1px solid var(--border-hi);
-    }
-
+    tbody tr { border-bottom: 1px solid var(--border-hi); }
     tbody tr:last-child { border-bottom: none; }
     tbody tr:hover { background: var(--surface-alt); }
     tbody tr.has-update { border-left: 3px solid var(--yellow); }
@@ -229,13 +226,10 @@
       font-weight: 500;
     }
 
-    .badge-helm      { background: var(--primary-bg);        color: var(--primary); }
-    .badge-fluxcd    { background: var(--purple-bg);         color: var(--purple);  }
-    .badge-https     { background: var(--green-bg);          color: var(--green);   }
-    .badge-oci       { background: var(--yellow-bg);         color: var(--yellow);  }
-    .badge-completed { background: var(--green-bg);          color: var(--green);   }
-    .badge-running   { background: var(--primary-bg);        color: var(--primary); }
-    .badge-failed    { background: rgba(248,81,73,.12);      color: var(--red);     }
+    .badge-helm   { background: var(--primary-bg); color: var(--primary); }
+    .badge-fluxcd { background: var(--purple-bg);  color: var(--purple);  }
+    .badge-https  { background: var(--green-bg);   color: var(--green);   }
+    .badge-oci    { background: var(--yellow-bg);  color: var(--yellow);  }
 
     .v-current { color: var(--text-muted); }
     .v-latest  { color: var(--green); font-weight: 500; }
@@ -288,7 +282,7 @@
       <path d="M2 17l10 5 10-5" stroke="#58a6ff" stroke-width="1.5" stroke-linejoin="round"/>
       <path d="M2 12l10 5 10-5" stroke="#58a6ff" stroke-width="1.5" stroke-linejoin="round"/>
     </svg>
-    Helm Update Checker
+    Update Checker
   </div>
   <span id="version-text" class="app-bar-version"></span>
   <div class="app-bar-spacer"></div>
@@ -364,27 +358,6 @@
       </table>
     </div>
   </div>
-
-  <div class="card" style="margin-top:22px">
-    <div class="toolbar">
-      <span style="font-size:13px;font-weight:500;color:var(--text)">Scan history</span>
-    </div>
-    <div class="tbl-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th style="cursor:default">Started</th>
-            <th style="cursor:default">Duration</th>
-            <th style="cursor:default">Trigger</th>
-            <th style="cursor:default">Scope</th>
-            <th style="cursor:default">Updates / Total</th>
-            <th style="cursor:default">Status</th>
-          </tr>
-        </thead>
-        <tbody id="scans-tbody"></tbody>
-      </table>
-    </div>
-  </div>
 </main>
 
 <div id="toasts"></div>
@@ -401,42 +374,6 @@ let triggerAvailable = false;
 async function init() {
   await checkStatus();
   await loadResults();
-  await loadScans();
-}
-
-async function loadScans() {
-  try {
-    const scans = await api('/api/scans') || [];
-    renderScans(scans);
-  } catch (_) {}
-}
-
-function renderScans(scans) {
-  const tbody = document.getElementById('scans-tbody');
-  if (!scans.length) {
-    tbody.innerHTML = `<tr><td colspan="6"><div class="empty" style="padding:20px 16px"><div>No scan history</div></div></td></tr>`;
-    return;
-  }
-  const statusClass = { completed: 'badge-completed', running: 'badge-running', failed: 'badge-failed' };
-  tbody.innerHTML = scans.map(s => {
-    const dur = s.duration_s != null ? fmtDuration(s.duration_s) : '—';
-    const err = s.error ? `<br><span style="color:var(--red);font-size:11px">${esc(s.error)}</span>` : '';
-    return `<tr>
-      <td>${esc(new Date(s.started_at).toLocaleString())}</td>
-      <td class="mono">${esc(dur)}</td>
-      <td>${esc(s.trigger || '—')}</td>
-      <td>${esc(s.scope || '—')}</td>
-      <td class="mono">${s.result_count ? s.updates_available + ' / ' + s.result_count : '—'}</td>
-      <td><span class="badge ${statusClass[s.status] || ''}">${esc(s.status)}</span>${err}</td>
-    </tr>`;
-  }).join('');
-}
-
-function fmtDuration(s) {
-  if (s < 60) return Math.round(s) + 's';
-  const m = Math.floor(s / 60);
-  const sec = Math.round(s % 60);
-  return sec ? m + 'm ' + sec + 's' : m + 'm';
 }
 
 async function checkStatus() {
@@ -445,7 +382,7 @@ async function checkStatus() {
     triggerAvailable = st.trigger_available === true;
 
     if (st.version) {
-      document.getElementById('version-text').textContent = 'v' + st.version;
+      document.getElementById('version-text').textContent = st.version;
     }
 
     if (triggerAvailable) {
@@ -457,8 +394,8 @@ async function checkStatus() {
       startPoll();
     }
 
-    if (st.last_scan && !st.last_scan.startsWith('0001')) {
-      setLastScan(st.last_scan);
+    if (st.last_scan_at) {
+      setLastScan(st.last_scan_at);
     }
   } catch (_) {}
 }
@@ -478,8 +415,8 @@ async function triggerScan() {
   setScanning(true);
 
   try {
-    const resp = await api('/api/trigger', 'POST');
-    toast('Scan triggered: ' + (resp.job || 'started'), 'ok');
+    await api('/api/scan/trigger', 'POST');
+    toast('Scan triggered', 'ok');
     startPoll();
   } catch (e) {
     toast('Failed to trigger scan', 'err');
@@ -498,10 +435,9 @@ function startPoll() {
         pollTimer = null;
         setScanning(false);
         document.getElementById('scan-btn').disabled = false;
-        setLastScan(st.last_scan);
+        if (st.last_scan_at) setLastScan(st.last_scan_at);
         await loadResults();
-        await loadScans();
-        toast('Scan complete - ' + st.result_count + ' results', 'ok');
+        toast('Scan complete — ' + st.result_count + ' results', 'ok');
       }
     } catch (_) {}
   }, 3000);
@@ -509,7 +445,7 @@ function startPoll() {
 
 function setScanning(on) {
   const chip = document.getElementById('status-chip');
-  const txt = document.getElementById('status-text');
+  const txt  = document.getElementById('status-text');
   chip.className = 'chip ' + (on ? 'scanning' : 'idle');
   txt.textContent = on ? 'Scanning...' : 'Ready';
 }
@@ -520,11 +456,11 @@ function setLastScan(iso) {
 }
 
 function updateStats() {
-  const total = results.length;
+  const total   = results.length;
   const updates = results.filter(r => r.update_available).length;
-  document.getElementById('s-total').textContent = total || '-';
+  document.getElementById('s-total').textContent   = total   || '-';
   document.getElementById('s-updates').textContent = updates || '-';
-  document.getElementById('s-ok').textContent = (total - updates) || '-';
+  document.getElementById('s-ok').textContent      = (total - updates) || '-';
   document.getElementById('s-sources').textContent = new Set(results.map(r => r.source)).size || '-';
 }
 
@@ -538,14 +474,14 @@ document.getElementById('thead-row').addEventListener('click', e => {
 });
 
 function render() {
-  const q = document.getElementById('q').value.toLowerCase();
+  const q  = document.getElementById('q').value.toLowerCase();
   const ft = document.getElementById('f-type').value;
   const fu = document.getElementById('f-upd').value;
 
   let rows = results.filter(r => {
     if (ft && r.type !== ft) return false;
     if (fu === '1' && !r.update_available) return false;
-    if (fu === '0' && r.update_available) return false;
+    if (fu === '0' &&  r.update_available) return false;
     if (q) {
       const blob = [r.source, r.chart, r.dependency, r.current_version, r.latest_version].join(' ').toLowerCase();
       if (!blob.includes(q)) return false;
@@ -570,7 +506,7 @@ function render() {
   }
 
   tbody.innerHTML = rows.map(r => {
-    const upd = r.update_available;
+    const upd    = r.update_available;
     const latest = r.latest_version
       ? `<span class="${upd ? 'v-update' : 'v-latest'}">${esc(r.latest_version)}</span>`
       : `<span class="v-na">-</span>`;

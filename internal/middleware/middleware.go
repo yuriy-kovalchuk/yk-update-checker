@@ -1,3 +1,4 @@
+// Package middleware provides shared HTTP middleware for the update-checker server.
 package middleware
 
 import (

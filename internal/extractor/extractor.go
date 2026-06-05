@@ -1,3 +1,4 @@
+// Package extractor parses GitOps YAML files and extracts Helm chart dependency references.
 package extractor
 
 import "strings"
@@ -11,25 +12,19 @@ type ChartRef struct {
 	CurrentVersion string
 }
 
-// Extractor extracts ChartRefs from a file on disk.
-// Implementations must be safe for concurrent use.
+// Extractor extracts ChartRefs from a file on disk; implementations must be safe for concurrent use.
 type Extractor interface {
 	// Type returns the label used in the Type column (e.g. "helm", "fluxcd").
 	Type() string
 	// Match reports whether this extractor should process the given file.
 	Match(path string, content []byte) bool
-	// PrepareFile is called once per YAML file during the pre-pass before extraction.
-	// Use this for cross-file reference resolution (e.g. FluxCD HelmRepository lookups).
-	// Extractors that don't need preparation should return nil.
+	// PrepareFile is called once per file during the pre-pass; use for cross-file reference resolution (e.g. FluxCD).
 	PrepareFile(path string, content []byte) error
-	// Extract parses content and returns the logical chart name together with
-	// its chart references.
+	// Extract parses content and returns the logical chart name and its chart references.
 	Extract(path string, content []byte) (chartName string, refs []ChartRef, err error)
 }
 
-// SplitOCIRef splits the last path segment off a bare OCI URL.
-//
-//	"ghcr.io/org/charts/podinfo" → ("ghcr.io/org/charts", "podinfo")
+// SplitOCIRef splits the last path segment off a bare OCI URL, e.g. "ghcr.io/org/charts/podinfo" → ("ghcr.io/org/charts", "podinfo").
 func SplitOCIRef(bare string) (repo, chart string) {
 	i := strings.LastIndex(bare, "/")
 	if i < 0 {
@@ -38,10 +33,7 @@ func SplitOCIRef(bare string) (repo, chart string) {
 	return bare[:i], bare[i+1:]
 }
 
-// ParseProtocol splits a raw repository URL into its protocol and bare URL.
-//
-//	"oci://ghcr.io/org/charts"           → ("oci",   "ghcr.io/org/charts")
-//	"https://charts.bitnami.com/bitnami" → ("https", "charts.bitnami.com/bitnami")
+// ParseProtocol splits a raw repository URL into protocol and bare URL, e.g. "oci://ghcr.io/org" → ("oci", "ghcr.io/org").
 func ParseProtocol(rawURL string) (protocol, repo string) {
 	switch {
 	case strings.HasPrefix(rawURL, "oci://"):

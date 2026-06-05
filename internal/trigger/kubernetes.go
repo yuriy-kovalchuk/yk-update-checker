@@ -1,4 +1,3 @@
-// Package trigger provides manual scan triggering via K8s CronJob.
 package trigger
 
 import (
@@ -16,44 +15,39 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-// KubernetesTrigger creates Jobs from an existing CronJob.
-type KubernetesTrigger struct {
+// Kubernetes creates a K8s Job from an existing CronJob template.
+// Used in Kubernetes deployments so the dashboard can trigger scans on demand.
+type Kubernetes struct {
 	client      kubernetes.Interface
 	namespace   string
 	cronJobName string
 	available   bool
 }
 
-// NewKubernetesTrigger creates a trigger that creates Jobs from an existing CronJob.
-// cronJobName is the name of the CronJob to create Jobs from.
-func NewKubernetesTrigger(cronJobName string) *KubernetesTrigger {
-	kt := &KubernetesTrigger{
-		cronJobName: cronJobName,
-		available:   false,
-	}
+// NewKubernetes creates a Kubernetes trigger that creates Jobs from the named CronJob.
+func NewKubernetes(cronJobName string) *Kubernetes {
+	kt := &Kubernetes{cronJobName: cronJobName}
 
 	if cronJobName == "" {
-		slog.Info("kubernetes trigger not configured (no cronjob name)")
+		slog.Info("kubernetes trigger disabled (no cronjob name)")
 		return kt
 	}
 
-	// Try to get in-cluster config
-	config, err := rest.InClusterConfig()
+	cfg, err := rest.InClusterConfig()
 	if err != nil {
-		slog.Info("kubernetes trigger not available (not in cluster)")
+		slog.Info("kubernetes trigger unavailable (not in cluster)")
 		return kt
 	}
 
-	client, err := kubernetes.NewForConfig(config)
+	client, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
-		slog.Warn("failed to create kubernetes client", "error", err)
+		slog.Warn("kubernetes trigger: failed to create client", "error", err)
 		return kt
 	}
 
-	// Read namespace from mounted service account
 	nsBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
 	if err != nil {
-		slog.Warn("failed to read namespace", "error", err)
+		slog.Warn("kubernetes trigger: failed to read namespace", "error", err)
 		return kt
 	}
 
@@ -61,41 +55,33 @@ func NewKubernetesTrigger(cronJobName string) *KubernetesTrigger {
 	kt.namespace = strings.TrimSpace(string(nsBytes))
 	kt.available = true
 
-	slog.Info("kubernetes trigger initialized",
-		"namespace", kt.namespace,
-		"cronjob", cronJobName,
-	)
+	slog.Info("kubernetes trigger ready", "namespace", kt.namespace, "cronjob", cronJobName)
 	return kt
 }
 
-// Available returns true if the trigger can create Jobs.
-func (kt *KubernetesTrigger) Available() bool {
-	return kt.available
-}
+// Available reports whether the trigger is ready to create Jobs.
+func (kt *Kubernetes) Available() bool { return kt.available }
 
-// Trigger creates a new Job from the CronJob template.
-func (kt *KubernetesTrigger) Trigger(ctx context.Context) (string, error) {
+// Trigger creates a one-off Job from the CronJob template and returns the Job name.
+func (kt *Kubernetes) Trigger(ctx context.Context) (string, error) {
 	if !kt.available {
 		return "", fmt.Errorf("kubernetes trigger not available")
 	}
 
-	// Get the CronJob to extract its job template
 	cronJob, err := kt.client.BatchV1().CronJobs(kt.namespace).Get(ctx, kt.cronJobName, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("get cronjob %s: %w", kt.cronJobName, err)
 	}
 
-	// Create Job from CronJob template
 	jobName := fmt.Sprintf("%s-manual-%d", kt.cronJobName, time.Now().Unix())
-
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
 			Namespace: kt.namespace,
 			Labels: map[string]string{
-				"app.kubernetes.io/name":      "update-checker-scanner",
+				"app.kubernetes.io/name":      "update-checker",
 				"app.kubernetes.io/component": "scanner",
-				"update-checker-scanner/trigger":          "manual",
+				"update-checker/trigger":      "manual",
 			},
 			Annotations: map[string]string{
 				"cronjob.kubernetes.io/instantiate": "manual",
@@ -116,10 +102,23 @@ func (kt *KubernetesTrigger) Trigger(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("create job: %w", err)
 	}
 
-	slog.Info("scanner job created from cronjob",
-		"job", created.Name,
-		"cronjob", kt.cronJobName,
-		"namespace", kt.namespace,
-	)
+	slog.Info("scanner job created", "job", created.Name, "cronjob", kt.cronJobName)
 	return created.Name, nil
 }
+
+// kubernetesTriggerAdapter wraps Kubernetes to satisfy the Trigger interface.
+type kubernetesTriggerAdapter struct {
+	kt *Kubernetes
+}
+
+// NewKubernetesTrigger returns a Trigger-compatible wrapper around Kubernetes.
+func NewKubernetesTrigger(cronJobName string) Trigger {
+	return &kubernetesTriggerAdapter{kt: NewKubernetes(cronJobName)}
+}
+
+func (a *kubernetesTriggerAdapter) Trigger(ctx context.Context) error {
+	_, err := a.kt.Trigger(ctx)
+	return err
+}
+
+func (a *kubernetesTriggerAdapter) Available() bool { return a.kt.Available() }

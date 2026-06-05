@@ -26,6 +26,10 @@ Thumbs.db
 *.swp
 *.swo
 
+# Env files
+.env
+.env.local
+
 # Project specific
 todo/
 data/
