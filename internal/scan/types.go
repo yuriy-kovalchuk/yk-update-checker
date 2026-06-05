@@ -1,9 +1,8 @@
-package types
+package scan
 
 import "time"
 
-// Result represents a dependency check outcome.
-// This is the canonical type used across the application.
+// Result is the outcome of one dependency version check.
 type Result struct {
 	Source          string    `json:"source"`
 	Chart           string    `json:"chart"`
@@ -17,13 +16,11 @@ type Result struct {
 	CheckedAt       time.Time `json:"checked_at"`
 }
 
-// RepoAuth holds credentials for a repository.
-type RepoAuth struct {
-	Type         string `yaml:"type"`
-	Token        string `yaml:"token"`
-	TokenFile    string `yaml:"token_file"`
-	Username     string `yaml:"username"`
-	Password     string `yaml:"password"`
-	PasswordFile string `yaml:"password_file"`
-	SSHKeyPath   string `yaml:"ssh_key_path"`
+// Status describes the current state of the scanner.
+type Status struct {
+	Scanning         bool       `json:"scanning"`
+	TriggerAvailable bool       `json:"trigger_available"`
+	LastScanAt       *time.Time `json:"last_scan_at,omitempty"`
+	ResultCount      int        `json:"result_count"`
+	Version          string     `json:"version"`
 }

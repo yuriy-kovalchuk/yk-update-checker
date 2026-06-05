@@ -6,14 +6,15 @@ on:
       - "v*"
 
 permissions:
-  contents: write    # create GitHub Releases and upload assets
-  packages: write    # push images and charts to GHCR
+  contents: write          # create GitHub Releases and upload assets
+  packages: write          # push images and charts to GHCR
+  security-events: write   # upload Trivy SARIF results
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/update-checker
+  REGISTRY:   ghcr.io
+  IMAGE:      ghcr.io/${{ github.repository_owner }}/yk-update-checker
   CHART_NAME: yk-update-checker
-  CHART_DIR: charts/yk-update-checker
+  CHART_DIR:  charts/yk-update-checker
 
 jobs:
   # ── Derive version once, share across jobs ─────────────────────────────────
@@ -36,56 +37,81 @@ jobs:
         id: date
         run: echo "date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
 
-  # ── Build and push all three images in parallel ────────────────────────────
-  build-images:
-    name: Build & push ${{ matrix.component }}
+  # ── Build and push image ───────────────────────────────────────────────────
+  build-image:
+    name: Build & push image
     needs: version
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        component: [api, scanner, dashboard]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push ${{ matrix.component }}
-        uses: docker/build-push-action@v6
+      - name: Build and push
+        uses: docker/build-push-action@v7
         with:
           context: .
-          file: Dockerfile.${{ matrix.component }}
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            ${{ env.IMAGE_PREFIX }}-${{ matrix.component }}:${{ needs.version.outputs.version }}
-            ${{ env.IMAGE_PREFIX }}-${{ matrix.component }}:latest
+            ${{ env.IMAGE }}:${{ needs.version.outputs.version }}
+            ${{ env.IMAGE }}:latest
           build-args: |
             VERSION=${{ needs.version.outputs.version }}
             COMMIT=${{ github.sha }}
             BUILD_DATE=${{ needs.version.outputs.date }}
-          cache-from: type=gha,scope=${{ matrix.component }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.component }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Security: Trivy image scan ────────────────────────────────────────────
+  scan-image:
+    name: Trivy image scan
+    needs: [version, build-image]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Trivy image scanner
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE }}:${{ needs.version.outputs.version }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN
+          limit-severities-for-sarif: true
+
+      - name: Upload results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
 
   # ── Package Helm chart and create GitHub Release ───────────────────────────
   release:
     name: Package chart & release
-    needs: [version, build-images]
+    needs: [version, build-image]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          fetch-depth: 0  # full history for release notes
+          fetch-depth: 0
 
       - name: Set up Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
 
       - name: Log in to Helm OCI registry (GHCR)
         run: |
@@ -109,19 +135,17 @@ jobs:
             oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.version.outputs.tag }}
           name: ${{ needs.version.outputs.tag }}
           generate_release_notes: true
           files: ${{ steps.helm-package.outputs.tgz }}
           body: |
-            ## Docker images
+            ## Docker image
 
-            ```
-            docker pull ${{ env.IMAGE_PREFIX }}-api:${{ needs.version.outputs.version }}
-            docker pull ${{ env.IMAGE_PREFIX }}-scanner:${{ needs.version.outputs.version }}
-            docker pull ${{ env.IMAGE_PREFIX }}-dashboard:${{ needs.version.outputs.version }}
+            ```bash
+            docker pull ${{ env.IMAGE }}:${{ needs.version.outputs.version }}
             ```
 
             ## Helm chart

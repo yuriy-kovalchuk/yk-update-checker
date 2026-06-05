@@ -1,68 +1,59 @@
-{{- if .Values.dashboard.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "yk-update-checker.dashboard.fullname" . }}
-  namespace: {{ .Release.Namespace }}
+  name: {{ include "yk-update-checker.fullname" . }}
   labels:
-    {{- include "yk-update-checker.dashboard.labels" . | nindent 4 }}
+    {{- include "yk-update-checker.labels" . | nindent 4 }}
 spec:
-  {{- if not .Values.dashboard.autoscaling.enabled }}
-  replicas: {{ .Values.dashboard.replicaCount }}
-  {{- end }}
+  replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      {{- include "yk-update-checker.dashboard.selectorLabels" . | nindent 6 }}
+      {{- include "yk-update-checker.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
-      annotations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
       labels:
-        {{- include "yk-update-checker.dashboard.labels" . | nindent 8 }}
-        {{- with .Values.podLabels }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
+        {{- include "yk-update-checker.selectorLabels" . | nindent 8 }}
     spec:
-      {{- with .Values.imagePullSecrets }}
-      imagePullSecrets:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
       serviceAccountName: {{ include "yk-update-checker.serviceAccountName" . }}
-      securityContext:
-        {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
-        - name: dashboard
-          image: "{{ .Values.dashboard.image.repository }}:{{ .Values.dashboard.image.tag | default .Chart.AppVersion }}"
-          imagePullPolicy: {{ .Values.dashboard.image.pullPolicy }}
-          securityContext:
-            {{- toYaml .Values.securityContext | nindent 12 }}
+        - name: update-checker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
-            - -api-url
-            - {{ include "yk-update-checker.api.url" . }}
-            - -port
-            - "8080"
-            {{- if .Values.dashboard.verbose }}
-            - -verbose
-            {{- end }}
-            {{- with .Values.dashboard.extraArgs }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
+            - serve
+            - --port=8080
+            - --config=/etc/update-checker/config.yaml
+            - --cronjob={{ include "yk-update-checker.fullname" . }}-scanner
           ports:
             - name: http
               containerPort: 8080
               protocol: TCP
           livenessProbe:
-            {{- toYaml .Values.dashboard.livenessProbe | nindent 12 }}
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 30
           readinessProbe:
-            {{- toYaml .Values.dashboard.readinessProbe | nindent 12 }}
-          resources:
-            {{- toYaml .Values.dashboard.resources | nindent 12 }}
-          {{- with concat .Values.extraEnv .Values.dashboard.extraEnv }}
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /etc/update-checker
+              readOnly: true
+          {{- with .Values.extraEnv }}
           env:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "yk-update-checker.fullname" . }}-config
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -75,4 +66,3 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-{{- end }}

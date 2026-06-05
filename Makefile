@@ -1,57 +1,122 @@
-.PHONY: build run run-api run-scanner run-dashboard lint fmt vet tidy deps-check install-hooks test test-cover docker-build docker-push clean help
+.PHONY: all build run run-scan test test-cover fmt vet lint tidy deps-check vuln \
+        docker-build docker-push buildx-setup \
+        clean install-hooks help
+
+# ── Variables ─────────────────────────────────────────────────────────────────
 
 CONFIG     ?= examples/config.yaml
-IMAGE      ?= ghcr.io/yuriy-kovalchuk
-VERSION    ?= dev
-COMMIT     := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
-DATE       := $(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
-PKG        := github.com/yuriy-kovalchuk/yk-helm-update-checker/internal/config
+LOCALBIN   ?= $(shell pwd)/bin
+IMAGE      ?= ghcr.io/yuriy-kovalchuk/yk-update-checker
+VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 PLATFORMS  ?= linux/amd64,linux/arm64
+GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+BUILD_DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+VERSION_PKG := github.com/yuriy-kovalchuk/yk-update-checker/internal/version
+LDFLAGS    := -s -w \
+  -X $(VERSION_PKG).Version=$(VERSION) \
+  -X $(VERSION_PKG).Commit=$(GIT_COMMIT) \
+  -X $(VERSION_PKG).BuildDate=$(BUILD_DATE)
 
-LDFLAGS := -ldflags "-s -w \
-  -X $(PKG).Version=$(VERSION) \
-  -X $(PKG).Commit=$(COMMIT) \
-  -X $(PKG).BuildDate=$(DATE)"
+# ── Default ───────────────────────────────────────────────────────────────────
 
-## build: compile all binaries for the current platform
-build:
-	mkdir -p bin
-	CGO_ENABLED=0 go build -trimpath $(LDFLAGS) -o bin/update-checker-api ./cmd/update-checker-api
-	CGO_ENABLED=0 go build -trimpath $(LDFLAGS) -o bin/update-checker-scanner ./cmd/update-checker-scanner
-	CGO_ENABLED=0 go build -trimpath $(LDFLAGS) -o bin/update-checker-dashboard ./cmd/update-checker-dashboard
+all: tidy fmt vet lint build
 
-## run-api: run the API server
-run-api: build
-	./bin/update-checker-api -db /tmp/update-checker.db
-
-## run-scanner: run the scanner (requires API to be running)
-run-scanner: build
-	./bin/update-checker-scanner -api-url http://localhost:8080 -config $(CONFIG)
-
-## run-dashboard: run the dashboard (requires API to be running)
-run-dashboard: build
-	./bin/update-checker-dashboard -api-url http://localhost:8080
-
-## lint: run golangci-lint
-lint:
-	golangci-lint run ./...
+# ── Code quality ──────────────────────────────────────────────────────────────
 
 ## fmt: format all Go source files
 fmt:
-	gofmt -w -s .
+	go fmt ./...
 
 ## vet: run go vet
 vet:
 	go vet ./...
+
+## lint: run golangci-lint
+lint:
+	golangci-lint run ./...
 
 ## tidy: tidy and verify go modules
 tidy:
 	go mod tidy
 	go mod verify
 
-## deps-check: list outdated direct dependencies (requires jq)
+## deps-check: list outdated direct dependencies
 deps-check:
-	go list -u -m -json all 2>/dev/null | jq -r 'select(.Update) | "\(.Path): \(.Version) → \(.Update.Version)"'
+	@go list -u -m -f '{{if and (not .Indirect) .Update}}{{.Path}}  {{.Version}} → {{.Update.Version}}{{end}}' all \
+	  | grep -v "^$$" \
+	  || echo "All direct dependencies are up to date."
+
+## vuln: check for known CVEs in the dependency tree
+vuln:
+	govulncheck ./...
+
+# ── Test ──────────────────────────────────────────────────────────────────────
+
+## test: run all tests with race detector
+test:
+	go test -race -timeout 120s ./...
+
+## test-cover: run tests with coverage report
+test-cover:
+	go test -race -timeout 120s -coverprofile=coverage.out ./...
+	go tool cover -func=coverage.out
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report: coverage.html"
+
+# ── Build ─────────────────────────────────────────────────────────────────────
+
+## build: compile the update-checker binary
+build:
+	mkdir -p $(LOCALBIN)
+	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(LOCALBIN)/update-checker ./cmd/update-checker
+
+# ── Run ───────────────────────────────────────────────────────────────────────
+
+## run: build and run the dashboard (serve mode) with verbose logging
+run: build
+	$(LOCALBIN)/update-checker serve --config $(CONFIG) --verbose
+
+## run-scan: build and run a single one-shot scan, print results to stdout
+run-scan: build
+	$(LOCALBIN)/update-checker scan --config $(CONFIG) --verbose
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+
+## buildx-setup: create or start the multi-platform buildx builder
+buildx-setup:
+	docker buildx create --name multiplatform --driver docker-container --bootstrap --use 2>/dev/null || \
+	  docker buildx inspect --bootstrap multiplatform
+
+## docker-build: build multi-arch image (does not push)
+docker-build: buildx-setup
+	docker buildx build \
+	  --builder multiplatform \
+	  --platform $(PLATFORMS) \
+	  --build-arg VERSION=$(VERSION) \
+	  --build-arg COMMIT=$(GIT_COMMIT) \
+	  --build-arg BUILD_DATE=$(BUILD_DATE) \
+	  -t $(IMAGE):$(VERSION) \
+	  -t $(IMAGE):latest \
+	  .
+
+## docker-push: build and push multi-arch image to GHCR
+docker-push: buildx-setup
+	docker buildx build \
+	  --builder multiplatform \
+	  --platform $(PLATFORMS) \
+	  --build-arg VERSION=$(VERSION) \
+	  --build-arg COMMIT=$(GIT_COMMIT) \
+	  --build-arg BUILD_DATE=$(BUILD_DATE) \
+	  -t $(IMAGE):$(VERSION) \
+	  -t $(IMAGE):latest \
+	  --push \
+	  .
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+
+## clean: remove build artefacts and coverage reports
+clean:
+	rm -rf bin/ coverage.out coverage.html
 
 ## install-hooks: configure git to use .githooks/
 install-hooks:
@@ -59,32 +124,6 @@ install-hooks:
 	chmod +x .githooks/*
 	@echo "Git hooks installed."
 
-## test: run all tests
-test:
-	go test -race -timeout 120s ./...
-
-## test-cover: run tests with coverage report
-test-cover:
-	go test -race -timeout 120s -coverprofile=coverage.out ./...
-	go tool cover -html=coverage.out -o coverage.html
-	@echo "Coverage report: coverage.html"
-
-## docker-build: build all Docker images
-docker-build:
-	docker buildx build --platform $(PLATFORMS) --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg BUILD_DATE=$(DATE) -t $(IMAGE)/update-checker-api:$(VERSION) -t $(IMAGE)/update-checker-api:latest -f Dockerfile.api .
-	docker buildx build --platform $(PLATFORMS) --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg BUILD_DATE=$(DATE) -t $(IMAGE)/update-checker-scanner:$(VERSION) -t $(IMAGE)/update-checker-scanner:latest -f Dockerfile.scanner .
-	docker buildx build --platform $(PLATFORMS) --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg BUILD_DATE=$(DATE) -t $(IMAGE)/update-checker-dashboard:$(VERSION) -t $(IMAGE)/update-checker-dashboard:latest -f Dockerfile.dashboard .
-
-## docker-push: build and push all Docker images
-docker-push:
-	docker buildx build --platform $(PLATFORMS) --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg BUILD_DATE=$(DATE) -t $(IMAGE)/update-checker-api:$(VERSION) -t $(IMAGE)/update-checker-api:latest -f Dockerfile.api . --push
-	docker buildx build --platform $(PLATFORMS) --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg BUILD_DATE=$(DATE) -t $(IMAGE)/update-checker-scanner:$(VERSION) -t $(IMAGE)/update-checker-scanner:latest -f Dockerfile.scanner . --push
-	docker buildx build --platform $(PLATFORMS) --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg BUILD_DATE=$(DATE) -t $(IMAGE)/update-checker-dashboard:$(VERSION) -t $(IMAGE)/update-checker-dashboard:latest -f Dockerfile.dashboard . --push
-
-## clean: remove build artefacts and coverage reports
-clean:
-	rm -rf bin/ coverage.out coverage.html
-
-## help: list available targets
+## help: list available make targets
 help:
 	@grep -E '^## ' Makefile | sed 's/^## //' | column -t -s ':'

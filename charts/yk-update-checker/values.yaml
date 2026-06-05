@@ -1,245 +1,71 @@
 # Default values for yk-update-checker.
-# This chart deploys three components:
-# - API (Deployment): Manages SQLite database, provides REST API
-# - Scanner (CronJob): Scans Git repos and posts results to API
-# - Dashboard (Deployment): Web UI that proxies to API
+# All three deployment modes (binary, Docker, Kubernetes) use the same image.
 
-# ============================================================================
-# API Configuration (Deployment)
-# ============================================================================
-api:
-  image:
-    repository: ghcr.io/yuriy-kovalchuk/update-checker-api
-    pullPolicy: IfNotPresent
-    tag: ""
+image:
+  repository: ghcr.io/yuriy-kovalchuk/yk-update-checker
+  tag: ""          # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
 
-  replicaCount: 1
+# ── Dashboard (always-on serve mode) ─────────────────────────────────────────
+replicaCount: 1
 
-  # Enable verbose / debug logging.
-  verbose: false
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
 
-  # Enable manual scan trigger via K8s Jobs.
-  enableTrigger: true
-
-  # Database persistence.
-  persistence:
-    existingClaim: ""
-    storageClass: ""
-    accessMode: ReadWriteOnce
-    size: 1Gi
-
-  # Database path within the persistent volume.
-  databasePath: /data/update-checker-scanner.db
-
-  resources:
-    requests:
-      cpu: 50m
-      memory: 64Mi
-    limits:
-      cpu: 200m
-      memory: 256Mi
-
-  livenessProbe:
-    httpGet:
-      path: /health
-      port: http
-    initialDelaySeconds: 5
-    periodSeconds: 30
-    failureThreshold: 3
-
-  readinessProbe:
-    httpGet:
-      path: /ready
-      port: http
-    initialDelaySeconds: 5
-    periodSeconds: 10
-    failureThreshold: 3
-
-  # Extra CLI flags.
-  extraArgs: []
-
-  # Extra environment variables (API only).
-  extraEnv: []
-
-# ============================================================================
-# Scanner Configuration (CronJob)
-# ============================================================================
-scanner:
-  image:
-    repository: ghcr.io/yuriy-kovalchuk/update-checker-scanner
-    pullPolicy: IfNotPresent
-    tag: ""
-
-  # CronJob schedule (default: every 6 hours).
-  schedule: "0 */6 * * *"
-
-  # Enable verbose / debug logging.
-  verbose: false
-
-  # Application configuration for scanning.
-  config:
-    # Maximum upgrade scope to report.
-    # One of: all | major | minor | patch
-    updateType: all
-
-    # Maximum concurrent registry version lookups per scan.
-    parallelChecks: 5
-
-    # List of Git repositories to scan.
-    repos: []
-    # repos:
-    #   - name: homelab
-    #     repo: https://github.com/example/my-gitops-repo
-    #     path: kubernetes/apps
-    #
-    #   - name: private-repo
-    #     repo: https://github.com/example/private-repo
-    #     auth:
-    #       type: token
-    #       existingSecret: my-github-token-secret
-    #       existingSecretKey: token
-
-  # CronJob settings.
-  cronjob:
-    successfulJobsHistoryLimit: 3
-    failedJobsHistoryLimit: 1
-    concurrencyPolicy: Forbid
-    ttlSecondsAfterFinished: 86400
-    restartPolicy: Never
-    backoffLimit: 0
-
-  resources:
-    requests:
-      cpu: 100m
-      memory: 256Mi
-    limits:
-      cpu: 1000m
-      memory: 1Gi
-
-  # Optional path for persistent git cache (avoids re-cloning on every run).
-  # Mount the backing volume via extraVolumes + extraVolumeMounts.
-  gitCacheDir: ""
-
-  # Extra volumes and mounts.
-  extraVolumes: []
-  extraVolumeMounts: []
-
-  # Extra CLI flags.
-  extraArgs: []
-
-  # Extra environment variables (scanner only).
-  extraEnv: []
-
-# ============================================================================
-# Dashboard Configuration (Deployment)
-# ============================================================================
-dashboard:
-  # Enable/disable the dashboard component.
-  enabled: true
-
-  image:
-    repository: ghcr.io/yuriy-kovalchuk/update-checker-dashboard
-    pullPolicy: IfNotPresent
-    tag: ""
-
-  replicaCount: 1
-
-  # Enable verbose / debug logging.
-  verbose: false
-
-  # Service configuration.
-  service:
-    type: ClusterIP
-    port: 80
-    annotations: {}
-
-  # Ingress configuration.
-  ingress:
-    enabled: false
-    className: ""
-    annotations: {}
-    hosts:
-      - host: yk-update-checker.local
-        paths:
-          - path: /
-            pathType: Prefix
-    tls: []
-
-  autoscaling:
-    enabled: false
-    minReplicas: 1
-    maxReplicas: 3
-    targetCPUUtilizationPercentage: 80
-
-  pdb:
-    enabled: false
-    minAvailable: 1
-
-  resources:
-    requests:
-      cpu: 10m
-      memory: 32Mi
-    limits:
-      cpu: 100m
-      memory: 64Mi
-
-  livenessProbe:
-    httpGet:
-      path: /health
-      port: http
-    initialDelaySeconds: 5
-    periodSeconds: 30
-    failureThreshold: 3
-
-  readinessProbe:
-    httpGet:
-      path: /ready
-      port: http
-    initialDelaySeconds: 5
-    periodSeconds: 10
-    failureThreshold: 3
-    timeoutSeconds: 5
-
-  # Extra CLI flags.
-  extraArgs: []
-
-  # Extra environment variables (dashboard only).
-  extraEnv: []
-
-# ============================================================================
-# Shared Configuration
-# ============================================================================
-imagePullSecrets: []
-nameOverride: ""
-fullnameOverride: ""
-
-serviceAccount:
-  create: true
-  automount: false
+ingress:
+  enabled: false
+  className: ""
   annotations: {}
-  name: ""
+  hosts:
+    - host: update-checker.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
 
-podAnnotations: {}
-podLabels: {}
-
-podSecurityContext:
-  runAsNonRoot: true
-  runAsUser: 65532
-  runAsGroup: 65532
-  fsGroup: 65532
-  seccompProfile:
-    type: RuntimeDefault
-
-securityContext:
-  allowPrivilegeEscalation: false
-  capabilities:
-    drop: [ALL]
-  readOnlyRootFilesystem: true
+resources: {}
 
 nodeSelector: {}
 tolerations: []
 affinity: {}
 
-# Extra environment variables applied to ALL components.
-# For per-component variables use api.extraEnv, scanner.extraEnv, or dashboard.extraEnv.
+# Extra environment variables applied to the serve Deployment.
 extraEnv: []
+# - name: FOO
+#   value: bar
+
+# ── Scanner CronJob ───────────────────────────────────────────────────────────
+scanner:
+  # CronJob schedule (standard 5-field cron expression).
+  schedule: "0 */6 * * *"
+  # Suspend the CronJob without deleting it.
+  suspend: false
+
+  # Scanner config — serialised as config.yaml mounted into the CronJob pod.
+  config:
+    update_type: all          # all | major | minor | patch
+    parallel_checks: 5
+    git_cache_dir: ""
+    repos: []
+    # - name: my-gitops
+    #   repo: https://github.com/example/my-gitops-repo
+    #   path: kubernetes/apps   # optional sub-path
+    #   auth:
+    #     type: token           # token | basic | ssh
+    #     existingSecret: github-token
+    #     existingSecretKey: token
+
+  resources: {}
+  extraEnv: []
+
+# ── RBAC (required for the manual scan trigger) ───────────────────────────────
+rbac:
+  # Creates a Role + RoleBinding allowing the serve pod to create Jobs.
+  create: true
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}

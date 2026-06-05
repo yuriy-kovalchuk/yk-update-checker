@@ -31,8 +31,7 @@ type fluxOCIRef struct {
 	Tag string `yaml:"tag"`
 }
 
-// fluxSourceResource is used during Prepare to parse HelmRepository and
-// OCIRepository manifests.
+// fluxSourceResource parses HelmRepository and OCIRepository manifests during Prepare.
 type fluxSourceResource struct {
 	Kind     string         `yaml:"kind"`
 	Metadata objectMeta     `yaml:"metadata"`
@@ -64,8 +63,7 @@ type helmReleaseResource struct {
 	Spec     helmReleaseSpec `yaml:"spec"`
 }
 
-// repoEntry is a resolved registry record built from a HelmRepository or
-// OCIRepository resource during the Prepare phase.
+// repoEntry is a resolved registry record built from a HelmRepository or OCIRepository during Prepare.
 type repoEntry struct {
 	protocol  string
 	repoURL   string // bare URL, scheme stripped
@@ -73,18 +71,14 @@ type repoEntry struct {
 	version   string // pinned version from OCIRepository spec.ref.tag
 }
 
-// FluxCD extracts chart refs from FluxCD HelmRelease manifests.
-//
-// It uses PrepareFile: the scanner calls PrepareFile with every YAML file
-// in the scan root before any Extract calls. PrepareFile collects all
-// HelmRepository and OCIRepository resources so that HelmRelease
-// sourceRef/chartRef cross-file lookups can succeed.
+// FluxCD extracts chart refs from HelmRelease manifests via a two-pass prepare+extract pattern (PrepareFile collects HelmRepository/OCIRepository sources; Extract resolves HelmRelease refs against them).
 type FluxCD struct {
 	mu   sync.RWMutex
 	helm map[string]repoEntry // keyed by "namespace/name"
 	oci  map[string]repoEntry // keyed by "namespace/name"
 }
 
+// NewFluxCD creates a new FluxCD extractor.
 func NewFluxCD() *FluxCD {
 	return &FluxCD{
 		helm: make(map[string]repoEntry),
@@ -92,15 +86,15 @@ func NewFluxCD() *FluxCD {
 	}
 }
 
+// Type returns "fluxcd".
 func (*FluxCD) Type() string { return "fluxcd" }
 
+// Match reports whether the file contains a HelmRelease resource.
 func (*FluxCD) Match(_ string, content []byte) bool {
 	return bytes.Contains(content, []byte("HelmRelease"))
 }
 
-// PrepareFile processes a single YAML file, collecting any HelmRepository and
-// OCIRepository resources it contains so that HelmRelease sourceRef/chartRef
-// lookups work across files. It is called once per file during the pre-pass.
+// PrepareFile collects HelmRepository/OCIRepository resources for cross-file HelmRelease sourceRef/chartRef resolution.
 func (f *FluxCD) PrepareFile(_ string, content []byte) error {
 	if !bytes.Contains(content, []byte("HelmRepository")) &&
 		!bytes.Contains(content, []byte("OCIRepository")) {
@@ -140,14 +134,7 @@ func (f *FluxCD) PrepareFile(_ string, content []byte) error {
 	return nil
 }
 
-// Extract handles multi-document YAML files. Each document that contains a
-// HelmRelease is processed independently via three patterns:
-//  1. Inline repoURL  — spec.chart.spec.repoURL (older/simpler pattern)
-//  2. sourceRef       — spec.chart.spec.sourceRef → HelmRepository
-//  3. chartRef        — spec.chartRef → OCIRepository
-//
-// ChartRef.Chart is set to the HelmRelease name so the scanner can attribute
-// each ref to the correct release even when a file contains multiple releases.
+// Extract returns chart refs from all HelmRelease documents in content via three patterns: inline repoURL, sourceRef→HelmRepository, chartRef→OCIRepository.
 func (f *FluxCD) Extract(_ string, content []byte) (string, []ChartRef, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(content))
 	var all []ChartRef

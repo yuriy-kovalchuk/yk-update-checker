@@ -1,74 +1,107 @@
 # Architecture
 
-yk-update-checker is a three-component system deployed via a single Helm chart. Each component is independently scaled and has a clearly bounded responsibility.
+yk-update-checker is a single binary with two subcommands deployed via a single Helm chart.
 
-## Components
+## Binary modes
 
-| Component | Kind | Port | Role |
-|---|---|---|---|
-| `update-checker-api` | Deployment | 8080 | Owns the SQLite database, exposes the REST API, manages K8s Job triggers |
-| `update-checker-scanner` | CronJob | — | Clones repos, checks versions against registries, posts results to the API |
-| `update-checker-dashboard` | Deployment | 8081 | Serves the web UI, reverse-proxies `/api/*` to the API |
+| Subcommand | Typical deployment | Role |
+|---|---|---|
+| `serve` | Kubernetes Deployment | HTTP server: API + embedded web UI, optional internal scheduler, optional K8s CronJob trigger |
+| `scan` | Kubernetes CronJob / local CLI | One-shot: clone repos → extract deps → check versions → POST results to a `serve` instance or print JSON to stdout |
 
-## Data flow
+## Component diagram
 
 ```
-[CronJob / manual trigger]
-        │
-        ▼
-  update-checker-scanner
-  ┌─────────────────────────────────────────────────┐
-  │ 1. Clone/fetch each configured Git repo         │
-  │ 2. Walk YAML files (Chart.yaml + HelmRelease)   │
-  │ 3. Resolve FluxCD cross-file references         │
-  │ 4. Look up latest versions in Helm / OCI reg.   │
-  │ 5. POST results to API                          │
-  └────────────────────┬────────────────────────────┘
-                       │ REST API
-                       ▼
-             update-checker-api
-             ┌────────────────┐
-             │  SQLite (WAL)  │
-             └────────────────┘
-                       ▲
-                       │ reverse proxy
-             update-checker-dashboard
-             ┌────────────────┐
-             │  Web UI        │
-             └────────────────┘
-                       ▲
-                  [browser]
+                  ┌─────────────────────────────────────────┐
+                  │          update-checker serve           │
+                  │                                         │
+  [browser] ────► │  GET /             (embedded index.html)│
+                  │  GET /api/results  (latest scan results)│
+                  │  GET /api/status   (scan state + meta)  │
+                  │  POST /api/scan/trigger   (manual scan) │
+                  │  POST /api/scan/results   (push results)│
+                  │  GET /health  GET /ready                │
+                  │                                         │
+                  │  ┌─────────┐   in-memory Repository     │
+                  │  │ Service │◄──(sync.RWMutex slice)     │
+                  │  └────┬────┘                            │
+                  │       │ Trigger interface               │
+                  │  ┌────▼──────────────────────┐          │
+                  │  │ KubernetesTrigger          │         │
+                  │  │  creates K8s Job from      │         │
+                  │  │  CronJob template          │         │
+                  │  │ — or —                     │         │
+                  │  │ InlineTrigger              │         │
+                  │  │  calls RunScan in-process  │         │
+                  │  └────────────────────────────┘         │
+                  └─────────────────────────────────────────┘
+                                    ▲
+                                    │ POST /api/scan/results
+                  ┌─────────────────┴───────────────────────┐
+                  │         update-checker scan             │
+                  │                                         │
+                  │  1. Clone/fetch each configured Git repo│
+                  │  2. Walk YAML files (two-pass)          │
+                  │  3. Resolve versions in Helm / OCI reg. │
+                  │  4. POST results  — or — print JSON     │
+                  └─────────────────────────────────────────┘
 ```
+
+## Scan triggering
+
+Three ways a scan can run:
+
+1. **Internal scheduler** (`--interval`) — fires immediately on startup then on every tick. Runs `RunScan` in-process inside the `serve` process.
+2. **K8s CronJob trigger** — `POST /api/scan/trigger` creates a one-off K8s `Job` from the CronJob spec. The resulting `scan` pod posts results back via `POST /api/scan/results`. Requires in-cluster RBAC and `--cronjob` flag.
+3. **Inline trigger** — `POST /api/scan/trigger` calls `RunScan` in-process in a goroutine. Used when no CronJob name is configured or when running outside Kubernetes.
+
+The trigger implementation is selected at startup: `KubernetesTrigger` if `--cronjob` is set and in-cluster config is available; `InlineTrigger` otherwise.
 
 ## Storage
 
-The API owns a single SQLite database file stored on a `PersistentVolumeClaim`. WAL mode is enabled so the scanner can write results while the dashboard reads previous scan data concurrently. The scanner never touches the database directly — all writes go through the API.
+Results are held in memory (`scan.Repository`, a `sync.RWMutex`-guarded slice). There is no database. Results are lost on pod restart; the next scheduled or manual scan repopulates them.
 
-The database schema has two tables:
-- `scans` — scan metadata (status, timing, result count, trigger source)
-- `results` — one row per detected dependency / HelmRelease
+## Package layout
+
+```
+cmd/update-checker/     entrypoint; flag parsing, wiring, signal handling
+internal/
+  api/                  HTTP server bootstrap, route registration, middleware chain
+  scan/
+    handler.go          POST /api/scan/trigger, POST /api/scan/results
+    service.go          orchestration: RunScan, StoreResults, GetResults, GetStatus, Trigger
+    repository.go       in-memory storage
+    runner.go           clone repos, run extractors, check versions concurrently
+    types.go            Result, Status
+  dashboard/            GET /, GET /api/results, GET /api/status; embeds ui/index.html
+  extractor/            Extractor interface + HelmChart + FluxCD implementations
+  registry/             version resolution: HTTPS index.yaml or OCI tag listing; scope filter
+  trigger/              Trigger interface; KubernetesTrigger + InlineTrigger
+  scheduler/            interval ticker; fires RunScan immediately then on each tick
+  config/               YAML config loader
+  middleware/           Recovery, Headers, Logger
+  version/              Version, Commit, BuildDate vars (ldflags)
+```
 
 ## Version detection
 
 ### Helm `Chart.yaml` dependencies
 
-The scanner walks every `Chart.yaml` in the repo. For each entry in `dependencies[]`:
+For each entry in `dependencies[]`:
 
-- **HTTPS** (`repository: https://...`): fetches `index.yaml` from the registry, parses all available versions, and picks the highest version that falls within the configured `updateType` scope.
-- **OCI** (`repository: oci://...`): lists tags via the OCI distribution API using `go-containerregistry`, then applies the same scope filter.
+- **HTTPS** (`repository: https://...`): fetches `index.yaml`, picks the highest version within the configured `updateType` scope (patch / minor / major / all).
+- **OCI** (`repository: oci://...`): lists tags via `go-containerregistry`, applies the same scope filter.
 
 ### FluxCD `HelmRelease`
 
-The scanner uses a two-pass approach because `HelmRelease` resources often reference a `HelmRepository` or `OCIRepository` that lives in a different file:
+Two-pass walk because `HelmRelease` resources cross-reference source objects in other files:
 
-1. **Prepare pass** — collects all `HelmRepository` and `OCIRepository` resources across every YAML file, keyed by `namespace/name`.
-2. **Extract pass** — resolves each `HelmRelease.spec.sourceRef` or `spec.chartRef` against the prepared map to obtain the concrete registry URL, then performs the same version lookup as above.
-
-Inline `repoURL` (without a separate source resource) is also supported.
+1. **Prepare pass** — collects all `HelmRepository` and `OCIRepository` resources, keyed by `namespace/name`.
+2. **Extract pass** — resolves each `HelmRelease` against the map (via `spec.sourceRef`, `spec.chartRef`, or inline `repoURL`), then performs the same version lookup as above.
 
 ## Authentication
 
-The scanner supports three auth types for private Git repositories:
+Private Git repository auth is configured per-repo in `config.yaml`:
 
 | Type | Mechanism |
 |---|---|
@@ -76,8 +109,4 @@ The scanner supports three auth types for private Git repositories:
 | `basic` | Username + password injected into the HTTPS clone URL |
 | `ssh` | SSH key file passed via `GIT_SSH_COMMAND` |
 
-Credentials are mounted into the scanner pod from Kubernetes Secrets. The scanner never writes credentials to disk.
-
-## Manual triggers
-
-When `api.enableTrigger` is true, the API can create a one-off Kubernetes `Job` from the scanner `CronJob` spec on demand. This lets the dashboard button initiate an immediate scan without waiting for the next scheduled run. The API requires in-cluster RBAC permissions to create Jobs in its own namespace.
+Credentials are mounted from Kubernetes Secrets. Nothing is written to disk.

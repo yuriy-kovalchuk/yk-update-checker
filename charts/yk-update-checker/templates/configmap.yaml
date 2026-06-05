@@ -1,52 +1,9 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "yk-update-checker.fullname" . }}
-  namespace: {{ .Release.Namespace }}
+  name: {{ include "yk-update-checker.fullname" . }}-config
   labels:
     {{- include "yk-update-checker.labels" . | nindent 4 }}
 data:
   config.yaml: |
-    update_type: {{ .Values.scanner.config.updateType | quote }}
-    parallel_checks: {{ .Values.scanner.config.parallelChecks }}
-    repos:
-    {{- if .Values.scanner.config.repos }}
-    {{- range .Values.scanner.config.repos }}
-      - name: {{ .name | quote }}
-        repo: {{ .repo | quote }}
-        {{- if .path }}
-        path: {{ .path | quote }}
-        {{- end }}
-        {{- if .auth }}
-        auth:
-          type: {{ .auth.type | quote }}
-          {{- if .auth.existingSecret }}
-          {{- $orgRepo := include "yk-update-checker.repoOrgPath" .repo }}
-          {{- $key := default "token" .auth.existingSecretKey }}
-          {{- if eq .auth.type "token" }}
-          token_file: {{ printf "/etc/update-checker-scanner/secrets/%s/%s" $orgRepo $key | quote }}
-          {{- else if eq .auth.type "basic" }}
-          username: {{ .auth.username | quote }}
-          password_file: {{ printf "/etc/update-checker-scanner/secrets/%s/%s" $orgRepo $key | quote }}
-          {{- else if eq .auth.type "ssh" }}
-          ssh_key_path: {{ printf "/etc/update-checker-scanner/secrets/%s/%s" $orgRepo $key | quote }}
-          {{- end }}
-          {{- else }}
-          {{- if .auth.token }}
-          token: {{ .auth.token | quote }}
-          {{- end }}
-          {{- if .auth.username }}
-          username: {{ .auth.username | quote }}
-          {{- end }}
-          {{- if .auth.password }}
-          password: {{ .auth.password | quote }}
-          {{- end }}
-          {{- if .auth.sshKeyPath }}
-          ssh_key_path: {{ .auth.sshKeyPath | quote }}
-          {{- end }}
-          {{- end }}
-        {{- end }}
-    {{- end }}
-    {{- else }}
-      []
-    {{- end }}
+    {{- .Values.scanner.config | toYaml | nindent 4 }}

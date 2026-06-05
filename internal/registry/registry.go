@@ -1,4 +1,5 @@
-package version
+// Package registry resolves the latest available chart version from HTTPS or OCI registries.
+package registry
 
 import (
 	"context"
@@ -7,38 +8,34 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
-	"github.com/yuriy-kovalchuk/yk-helm-update-checker/internal/constants"
 	"gopkg.in/yaml.v3"
 )
 
+// Scope controls which upgrade levels are eligible.
 type Scope string
 
+// Eligible upgrade levels for version comparisons.
 const (
-	ScopeAll Scope = "all"
+	ScopeAll   Scope = "all"
 	ScopeMajor Scope = "major"
 	ScopeMinor Scope = "minor"
 	ScopePatch Scope = "patch"
 )
 
 var validScopes = map[Scope]bool{
-	ScopeAll:   true,
-	ScopeMajor: true,
-	ScopeMinor: true,
-	ScopePatch: true,
+	ScopeAll: true, ScopeMajor: true, ScopeMinor: true, ScopePatch: true,
 }
 
-func (s Scope) IsValid() bool {
-	return validScopes[s]
-}
+// IsValid reports whether s is a recognised scope value.
+func (s Scope) IsValid() bool { return validScopes[s] }
 
-// ParseScope converts a string to a Scope, falling back to ScopeAll for
-// unrecognised values. Use this instead of bare Scope(s) casts so that
-// the fallback logic lives in one place.
+// ParseScope converts a string to a Scope, falling back to ScopeAll.
 func ParseScope(s string) Scope {
 	sc := Scope(s)
 	if sc.IsValid() {
@@ -47,18 +44,15 @@ func ParseScope(s string) Scope {
 	return ScopeAll
 }
 
-// httpClient is shared across all version checks. The 30-second timeout
-// prevents a slow or unresponsive registry from stalling a goroutine
-// indefinitely.
-var httpClient = &http.Client{Timeout: constants.HTTPClientTimeout}
+var httpClient = &http.Client{Timeout: 30 * time.Second}
 
-// IndexCache stores parsed Helm index.yaml responses for the duration of a
-// scan so that charts sharing a registry avoid redundant HTTP fetches.
+// IndexCache stores parsed Helm index.yaml responses for the duration of a scan.
 type IndexCache struct {
 	mu    sync.RWMutex
 	items map[string]*helmIndex
 }
 
+// NewIndexCache creates an empty IndexCache for reuse within a single scan.
 func NewIndexCache() *IndexCache {
 	return &IndexCache{items: make(map[string]*helmIndex)}
 }
@@ -87,13 +81,6 @@ func (c *IndexCache) getOrFetch(ctx context.Context, repoURL string) (*helmIndex
 }
 
 // Latest returns the latest stable chart version available in the registry.
-//
-// protocol is "https" or "oci".
-// repoURL is the registry base URL with the scheme already stripped.
-// chartName is the chart to look up within the registry.
-// currentVersion is the currently pinned semver string.
-// scope controls which upgrade levels are eligible.
-//
 // Returns an empty string (no error) when no eligible update exists.
 func Latest(ctx context.Context, cache *IndexCache, protocol, repoURL, chartName, currentVersion string, scope Scope) (string, error) {
 	if repoURL == "" {
@@ -112,8 +99,6 @@ func Latest(ctx context.Context, cache *IndexCache, protocol, repoURL, chartName
 	}
 }
 
-// latestFromTags returns the highest stable version from tags that is newer
-// than current and within the allowed scope.
 func latestFromTags(current *semver.Version, tags []string, scope Scope) string {
 	var candidates []*semver.Version
 	for _, t := range tags {
@@ -154,9 +139,7 @@ type helmIndex struct {
 }
 
 func fetchIndex(ctx context.Context, repoURL string) (*helmIndex, error) {
-	base := strings.TrimSuffix(repoURL, "/")
-	indexURL := "https://" + base + "/index.yaml"
-
+	indexURL := "https://" + strings.TrimSuffix(repoURL, "/") + "/index.yaml"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, indexURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build request for %s: %w", indexURL, err)
@@ -165,12 +148,10 @@ func fetchIndex(ctx context.Context, repoURL string) (*helmIndex, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetch %s: %w", indexURL, err)
 	}
-	defer resp.Body.Close()
-
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET %s returned %d", indexURL, resp.StatusCode)
 	}
-
 	var index helmIndex
 	if err := yaml.NewDecoder(resp.Body).Decode(&index); err != nil {
 		return nil, fmt.Errorf("parse index.yaml: %w", err)
@@ -183,17 +164,14 @@ func latestHTTPS(ctx context.Context, cache *IndexCache, repoURL, chartName, cur
 	if err != nil {
 		return "", err
 	}
-
 	entries, ok := index.Entries[chartName]
 	if !ok {
 		return "", fmt.Errorf("chart %q not found in index at %s", chartName, strings.TrimSuffix(repoURL, "/"))
 	}
-
 	current, err := semver.NewVersion(currentVersion)
 	if err != nil {
 		return "", fmt.Errorf("invalid current version %q: %w", currentVersion, err)
 	}
-
 	tags := make([]string, 0, len(entries))
 	for _, e := range entries {
 		tags = append(tags, e.Version)
@@ -203,12 +181,10 @@ func latestHTTPS(ctx context.Context, cache *IndexCache, repoURL, chartName, cur
 
 func latestOCI(ctx context.Context, repoURL, chartName, currentVersion string, scope Scope) (string, error) {
 	ref := strings.TrimSuffix(repoURL, "/") + "/" + chartName
-
 	repo, err := name.NewRepository(ref)
 	if err != nil {
 		return "", fmt.Errorf("parse OCI ref %q: %w", ref, err)
 	}
-
 	tags, err := remote.List(repo,
 		remote.WithAuthFromKeychain(authn.DefaultKeychain),
 		remote.WithContext(ctx),
@@ -216,11 +192,9 @@ func latestOCI(ctx context.Context, repoURL, chartName, currentVersion string, s
 	if err != nil {
 		return "", fmt.Errorf("list tags for %q: %w", ref, err)
 	}
-
 	current, err := semver.NewVersion(currentVersion)
 	if err != nil {
 		return "", fmt.Errorf("invalid current version %q: %w", currentVersion, err)
 	}
-
 	return latestFromTags(current, tags, scope), nil
 }

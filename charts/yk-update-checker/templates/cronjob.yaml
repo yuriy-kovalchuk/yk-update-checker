@@ -1,113 +1,47 @@
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: {{ include "yk-update-checker.scanner.fullname" . }}
-  namespace: {{ .Release.Namespace }}
+  name: {{ include "yk-update-checker.fullname" . }}-scanner
   labels:
-    {{- include "yk-update-checker.scanner.labels" . | nindent 4 }}
+    {{- include "yk-update-checker.labels" . | nindent 4 }}
+    app.kubernetes.io/component: scanner
 spec:
   schedule: {{ .Values.scanner.schedule | quote }}
-  concurrencyPolicy: {{ .Values.scanner.cronjob.concurrencyPolicy }}
-  successfulJobsHistoryLimit: {{ .Values.scanner.cronjob.successfulJobsHistoryLimit }}
-  failedJobsHistoryLimit: {{ .Values.scanner.cronjob.failedJobsHistoryLimit }}
+  suspend: {{ .Values.scanner.suspend }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
   jobTemplate:
-    metadata:
-      labels:
-        {{- include "yk-update-checker.scanner.labels" . | nindent 8 }}
     spec:
-      {{- if .Values.scanner.cronjob.ttlSecondsAfterFinished }}
-      ttlSecondsAfterFinished: {{ .Values.scanner.cronjob.ttlSecondsAfterFinished }}
-      {{- end }}
-      backoffLimit: {{ .Values.scanner.cronjob.backoffLimit }}
       template:
         metadata:
-          annotations:
-            checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
-            {{- with .Values.podAnnotations }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
           labels:
-            {{- include "yk-update-checker.scanner.labels" . | nindent 12 }}
-            {{- with .Values.podLabels }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
+            {{- include "yk-update-checker.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: scanner
         spec:
-          {{- with .Values.imagePullSecrets }}
-          imagePullSecrets:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
+          restartPolicy: Never
           serviceAccountName: {{ include "yk-update-checker.serviceAccountName" . }}
-          restartPolicy: {{ .Values.scanner.cronjob.restartPolicy }}
-          securityContext:
-            {{- toYaml .Values.podSecurityContext | nindent 12 }}
           containers:
             - name: scanner
-              image: "{{ .Values.scanner.image.repository }}:{{ .Values.scanner.image.tag | default .Chart.AppVersion }}"
-              imagePullPolicy: {{ .Values.scanner.image.pullPolicy }}
-              securityContext:
-                {{- toYaml .Values.securityContext | nindent 16 }}
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
               args:
-                - -config
-                - /etc/update-checker-scanner/config.yaml
-                - -api-url
-                - {{ include "yk-update-checker.api.url" . }}
-                {{- if .Values.scanner.gitCacheDir }}
-                - -git-cache
-                - {{ .Values.scanner.gitCacheDir }}
-                {{- end }}
-                {{- if .Values.scanner.verbose }}
-                - -verbose
-                {{- end }}
-                {{- with .Values.scanner.extraArgs }}
+                - scan
+                - --config=/etc/update-checker/config.yaml
+                - --server-url=http://{{ include "yk-update-checker.fullname" . }}:{{ .Values.service.port }}
+              volumeMounts:
+                - name: config
+                  mountPath: /etc/update-checker
+                  readOnly: true
+              env:
+                - name: SCAN_TRIGGER
+                  value: scheduled
+                {{- with .Values.scanner.extraEnv }}
                 {{- toYaml . | nindent 16 }}
                 {{- end }}
               resources:
                 {{- toYaml .Values.scanner.resources | nindent 16 }}
-              {{- with concat .Values.extraEnv .Values.scanner.extraEnv }}
-              env:
-                {{- toYaml . | nindent 16 }}
-              {{- end }}
-              volumeMounts:
-                - name: config
-                  mountPath: /etc/update-checker-scanner
-                  readOnly: true
-                - name: tmp
-                  mountPath: /tmp
-{{- range .Values.scanner.config.repos }}
-                {{- if and .auth .auth.existingSecret }}
-                - name: {{ include "yk-update-checker.secretVolumeName" .name }}
-                  mountPath: /etc/update-checker-scanner/secrets/{{ include "yk-update-checker.repoOrgPath" .repo }}
-                  readOnly: true
-                {{- end }}
-                {{- end }}
-                {{- with .Values.scanner.extraVolumeMounts }}
-                {{- toYaml . | nindent 16 }}
-                {{- end }}
           volumes:
             - name: config
               configMap:
-                name: {{ include "yk-update-checker.fullname" . }}
-            - name: tmp
-              emptyDir: {}
-            {{- range .Values.scanner.config.repos }}
-            {{- if and .auth .auth.existingSecret }}
-            - name: {{ include "yk-update-checker.secretVolumeName" .name }}
-              secret:
-                secretName: {{ .auth.existingSecret }}
-            {{- end }}
-            {{- end }}
-            {{- with .Values.scanner.extraVolumes }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
-          {{- with .Values.nodeSelector }}
-          nodeSelector:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          {{- with .Values.affinity }}
-          affinity:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          {{- with .Values.tolerations }}
-          tolerations:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
+                name: {{ include "yk-update-checker.fullname" . }}-config

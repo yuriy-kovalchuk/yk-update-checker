@@ -1,86 +1,99 @@
-# Local testing
+# Local Testing
 
 ## Prerequisites
 
-- Go 1.26+
+- Go 1.26.2+
 - `git` binary on `$PATH`
-- A `config.yaml` pointing at one or more repos (see `config.example.yaml`)
-- `golangci-lint` for linting (`go install github.com/golangci/golangci-lint/cmd/golangci-lint@v2.11.4`)
-- `jq` for `make deps-check`
+- `golangci-lint` v2.x (`brew install golangci-lint`)
 
-## Running the components
-
-The three binaries are independent processes. Run each in a separate terminal after `make build`.
+## Quick start
 
 ```bash
-# Terminal 1 — API server (SQLite at /tmp/update-checker.db)
-make run-api
-
-# Terminal 2 — Scanner (reads config.yaml, posts to localhost:8080)
-make run-scanner
-
-# Terminal 3 — Dashboard (UI at http://localhost:8081, proxies /api/* to API)
-make run-dashboard
+cp examples/config.example.yaml examples/config.yaml
+# edit examples/config.yaml — add at least one repo
+make run
 ```
 
-The dashboard is available at [http://localhost:8081](http://localhost:8081) once all three are running.
+`make run` builds the binary and starts `serve` mode. The UI is at [http://localhost:8080](http://localhost:8080).
 
-## Configuring repos
+## Config
 
-Copy `config.example.yaml` to `config.yaml` and add at least one repo:
+`examples/config.yaml` is gitignored. Minimum config:
 
 ```yaml
+update_type: all        # all | major | minor | patch
+parallel_checks: 5
+
 repos:
   - name: my-gitops
     repo: https://github.com/example/my-gitops-repo
     path: kubernetes/apps   # optional sub-path
-
-updateType: all             # all | major | minor | patch
-parallelChecks: 5
 ```
 
-For private repos, use a token or SSH key — see `config.example.yaml` for all auth options.
+For private repos see `examples/config.example.yaml` — it covers token, basic, and SSH auth.
 
-## Useful make targets
+## Running modes
+
+### Serve mode (API + UI + optional scheduler)
 
 ```bash
-make build          # compile all three binaries to bin/
-make test           # run tests with race detector
-make test-cover     # generate coverage.html
-make lint           # run golangci-lint
-make fmt            # format all Go source files
-make vet            # run go vet
+make run
+# or with options:
+./bin/update-checker serve \
+  --config examples/config.yaml \
+  --port 8080 \
+  --interval 6h \
+  --verbose
+```
+
+The UI polls `/api/results` and `/api/status`. A manual scan button calls `POST /api/scan/trigger` which runs a scan in-process (inline trigger) when there is no `--cronjob` flag.
+
+### One-shot scan (print to stdout)
+
+```bash
+make run-scan
+# or:
+./bin/update-checker scan --config examples/config.yaml --verbose
+```
+
+### One-shot scan (post to a running serve instance)
+
+```bash
+./bin/update-checker scan \
+  --config examples/config.yaml \
+  --server-url http://localhost:8080
+```
+
+## Make targets
+
+```bash
+make build          # compile → bin/update-checker
+make run            # build + serve (uses examples/config.yaml)
+make run-scan       # build + one-shot scan, print JSON to stdout
+make test           # go test -race -timeout 120s ./...
+make test-cover     # coverage report → coverage.html
+make lint           # golangci-lint run ./...
+make fmt            # go fmt ./...
+make vet            # go vet ./...
 make tidy           # go mod tidy + verify
-make deps-check     # list outdated direct dependencies (requires jq)
+make deps-check     # list outdated direct dependencies
+make vuln           # govulncheck ./...
 make clean          # remove bin/, coverage.out, coverage.html
 make install-hooks  # register .githooks/ with git
-make help           # list all targets with descriptions
+make help           # list all targets
 ```
 
 ## Git hooks
 
-The repo ships a `pre-push` hook that:
-- Enforces conventional commit messages on pushes to `master`
-- Validates `v*` tag format (`v<major>.<minor>.<patch>[-prerelease]`)
-- Runs the test suite before each push
+`make install-hooks` registers `.githooks/`:
 
-Install once:
-
-```bash
-make install-hooks
-```
-
-## Running a subset of tests
-
-```bash
-go test -v -run TestExtractor ./internal/extractor/...
-go test -v -run TestVersion   ./internal/version/...
-```
+- **commit-msg** — enforces `type: description` commit format
+- **pre-push** — validates conventional commits on `master`, validates `v*` tag format, runs `go test ./...`
 
 ## Linting
 
 ```bash
 make lint
-# or with auto-fix where possible:
+# auto-fix where possible:
 golangci-lint run --fix ./...
 ```
