@@ -25,7 +25,32 @@ ingress:
           pathType: Prefix
   tls: []
 
-resources: {}
+resources:
+  requests:
+    cpu: 100m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 128Mi
+
+# Security context for the serve Deployment. Overridden independently from scanner.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  fsGroup: 65534
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
 
 nodeSelector: {}
 tolerations: []
@@ -47,7 +72,7 @@ scanner:
   config:
     update_type: all          # all | major | minor | patch
     parallel_checks: 5
-    git_cache_dir: ""
+    git_cache_dir: /tmp/git-cache
     repos: []
     # - name: my-gitops
     #   repo: https://github.com/example/my-gitops-repo
@@ -57,8 +82,32 @@ scanner:
     #     existingSecret: github-token
     #     existingSecretKey: token
 
-  resources: {}
-  extraEnv: []
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 1000m
+      memory: 256Mi
+
+  # Security context for the scanner CronJob — independent from deployment.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    fsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
+
+  containerSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
 
 # ── RBAC (required for the manual scan trigger) ───────────────────────────────
 rbac:

@@ -1,32 +1,11 @@
 # Test values for yk-update-checker
-# Copy and customize for your environment, then deploy with deploy-test.sh
-
-api:
-  image:
-    repository: harbor-mgmt.yuriy-lab.cloud/dev/update-checker-api
-    tag: latest
-    pullPolicy: Always
-  verbose: true
-
+image:
+  tag: "0.1.0-alpha"          # defaults to .Chart.AppVersion
 scanner:
-  image:
-    pullPolicy: Always
-    repository: harbor-mgmt.yuriy-lab.cloud/dev/update-checker-scanner
-    tag: latest
-
-  verbose: true
   config:
-    updateType: all
-    parallelChecks: 5
+    update_type: all          # all | major | minor | patch
+    parallel_checks: 5
+    git_cache_dir: /tmp/git-cache
     repos:
-      - name: Homelab
-        repo: https://github.com/yuriy-kovalchuk/Homelab
-
-
-dashboard:
-  image:
-    pullPolicy: Always
-    repository: harbor-mgmt.yuriy-lab.cloud/dev/update-checker-dashboard
-    tag: latest
-
-  verbose: true
+      - name: my-gitops
+        repo: https://github.com/yuriy-kovalchuk/homelab

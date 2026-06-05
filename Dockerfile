@@ -19,11 +19,11 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
       -X github.com/yuriy-kovalchuk/yk-update-checker/internal/version.BuildDate=${BUILD_DATE}" \
     -o /update-checker ./cmd/update-checker
 
-FROM gcr.io/distroless/static:nonroot@sha256:dfadf31470f770fcabd48903762dce126958e98d1ce320acf1216bbfaa42d79c
+FROM alpine/git:v2.52.0
 LABEL org.opencontainers.image.title="yk-update-checker" \
       org.opencontainers.image.description="Scans GitOps repos for outdated Helm chart and FluxCD dependencies" \
       org.opencontainers.image.source="https://github.com/yuriy-kovalchuk/yk-update-checker" \
       org.opencontainers.image.licenses="MIT"
 COPY --from=builder /update-checker /update-checker
-USER nonroot:nonroot
+USER 65534:65534
 ENTRYPOINT ["/update-checker"]
