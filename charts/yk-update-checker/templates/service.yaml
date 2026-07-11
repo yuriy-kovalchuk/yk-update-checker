@@ -13,3 +13,6 @@ spec:
       protocol: TCP
   selector:
     {{- include "yk-update-checker.selectorLabels" . | nindent 4 }}
+    # Scanner Job pods share the selector labels; without this the Service
+    # also routes to them and connections are refused mid-scan.
+    app.kubernetes.io/component: dashboard

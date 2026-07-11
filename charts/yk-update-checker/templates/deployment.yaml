@@ -13,6 +13,7 @@ spec:
     metadata:
       labels:
         {{- include "yk-update-checker.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: dashboard
     spec:
       serviceAccountName: {{ include "yk-update-checker.serviceAccountName" . }}
       securityContext:
