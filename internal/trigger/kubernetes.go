@@ -10,10 +10,18 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
+
+// manualJobSelector matches Jobs created by manual triggers.
+const manualJobSelector = "update-checker/trigger=manual"
+
+// manualJobTTLSeconds cleans up finished manual Jobs so they don't accumulate
+// (the CronJob's history limits only apply to Jobs it owns).
+const manualJobTTLSeconds = int32(3600)
 
 // Kubernetes creates a K8s Job from an existing CronJob template.
 // Used in Kubernetes deployments so the dashboard can trigger scans on demand.
@@ -63,6 +71,7 @@ func NewKubernetes(cronJobName string) *Kubernetes {
 func (kt *Kubernetes) Available() bool { return kt.available }
 
 // Trigger creates a one-off Job from the CronJob template and returns the Job name.
+// It returns ErrAlreadyRunning when a scanner Job (scheduled or manual) is still active.
 func (kt *Kubernetes) Trigger(ctx context.Context) (string, error) {
 	if !kt.available {
 		return "", fmt.Errorf("kubernetes trigger not available")
@@ -71,6 +80,16 @@ func (kt *Kubernetes) Trigger(ctx context.Context) (string, error) {
 	cronJob, err := kt.client.BatchV1().CronJobs(kt.namespace).Get(ctx, kt.cronJobName, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("get cronjob %s: %w", kt.cronJobName, err)
+	}
+	if len(cronJob.Status.Active) > 0 {
+		slog.Info("scan trigger skipped, scheduled job active", "job", cronJob.Status.Active[0].Name)
+		return "", ErrAlreadyRunning
+	}
+	if active, err := kt.activeManualJob(ctx); err != nil {
+		return "", err
+	} else if active != "" {
+		slog.Info("scan trigger skipped, manual job active", "job", active)
+		return "", ErrAlreadyRunning
 	}
 
 	jobName := fmt.Sprintf("%s-manual-%d", kt.cronJobName, time.Now().Unix())
@@ -97,13 +116,60 @@ func (kt *Kubernetes) Trigger(ctx context.Context) (string, error) {
 		)
 	}
 
+	if job.Spec.TTLSecondsAfterFinished == nil {
+		ttl := manualJobTTLSeconds
+		job.Spec.TTLSecondsAfterFinished = &ttl
+	}
+
 	created, err := kt.client.BatchV1().Jobs(kt.namespace).Create(ctx, job, metav1.CreateOptions{})
 	if err != nil {
+		// Job names have second resolution; a concurrent trigger in the same
+		// second means a scan is effectively already starting.
+		if apierrors.IsAlreadyExists(err) {
+			return "", ErrAlreadyRunning
+		}
 		return "", fmt.Errorf("create job: %w", err)
 	}
 
 	slog.Info("scanner job created", "job", created.Name, "cronjob", kt.cronJobName)
 	return created.Name, nil
+}
+
+// Running reports whether a scanner Job (scheduled or manual) is currently active.
+func (kt *Kubernetes) Running(ctx context.Context) bool {
+	if !kt.available {
+		return false
+	}
+	cronJob, err := kt.client.BatchV1().CronJobs(kt.namespace).Get(ctx, kt.cronJobName, metav1.GetOptions{})
+	if err == nil && len(cronJob.Status.Active) > 0 {
+		return true
+	}
+	active, err := kt.activeManualJob(ctx)
+	return err == nil && active != ""
+}
+
+// activeManualJob returns the name of an unfinished manually triggered Job, or "".
+func (kt *Kubernetes) activeManualJob(ctx context.Context) (string, error) {
+	jobs, err := kt.client.BatchV1().Jobs(kt.namespace).List(ctx, metav1.ListOptions{LabelSelector: manualJobSelector})
+	if err != nil {
+		return "", fmt.Errorf("list manual jobs: %w", err)
+	}
+	for i := range jobs.Items {
+		if !jobFinished(&jobs.Items[i]) {
+			return jobs.Items[i].Name, nil
+		}
+	}
+	return "", nil
+}
+
+// jobFinished reports whether the Job has reached a terminal condition.
+func jobFinished(job *batchv1.Job) bool {
+	for _, c := range job.Status.Conditions {
+		if (c.Type == batchv1.JobComplete || c.Type == batchv1.JobFailed) && c.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
 }
 
 // kubernetesTriggerAdapter wraps Kubernetes to satisfy the Trigger interface.
@@ -122,3 +188,5 @@ func (a *kubernetesTriggerAdapter) Trigger(ctx context.Context) error {
 }
 
 func (a *kubernetesTriggerAdapter) Available() bool { return a.kt.Available() }
+
+func (a *kubernetesTriggerAdapter) Running(ctx context.Context) bool { return a.kt.Running(ctx) }

@@ -2,17 +2,17 @@ package scan
 
 import (
 	"context"
+	"encoding/base64"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"github.com/Masterminds/semver/v3"
 
@@ -42,10 +42,14 @@ func NewRunner(repos []config.Repo, newExtractors func() []extractor.Extractor, 
 }
 
 // Run syncs all repos and returns aggregated results.
-func (r *Runner) Run(ctx context.Context) ([]Result, error) {
+// repoErrs holds per-repo sync failures; results from the remaining repos are
+// still returned alongside them. err is non-nil only when nothing could be
+// scanned at all (context cancelled or every repo failed) — callers must not
+// treat such a run as a completed scan.
+func (r *Runner) Run(ctx context.Context) (results []Result, repoErrs []error, err error) {
 	workDir, cleanup, err := r.setupWorkspace()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if cleanup {
 		defer func() {
@@ -57,17 +61,17 @@ func (r *Runner) Run(ctx context.Context) ([]Result, error) {
 
 	cache := registry.NewIndexCache()
 
-	var (
-		results []Result
-		mu      sync.Mutex
-	)
+	var mu sync.Mutex
 
 	runConcurrent(ctx, r.repos, r.parallelChecks, func(ctx context.Context, repo config.Repo) {
-		dest := filepath.Join(workDir, safeName(repo.Name))
+		dest := filepath.Join(workDir, config.SafeName(repo.Name))
 		slog.Info("syncing repo", "name", repo.Name, "url", repo.URL)
 
 		if err := syncRepo(ctx, repo, dest); err != nil {
 			slog.Error("sync failed", "repo", repo.Name, "error", err)
+			mu.Lock()
+			repoErrs = append(repoErrs, fmt.Errorf("repo %s: %w", repo.Name, err))
+			mu.Unlock()
 			return
 		}
 
@@ -84,7 +88,13 @@ func (r *Runner) Run(ctx context.Context) ([]Result, error) {
 		mu.Unlock()
 	})
 
-	return results, nil
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, nil, fmt.Errorf("scan interrupted: %w", ctxErr)
+	}
+	if len(repoErrs) == len(r.repos) {
+		return nil, nil, fmt.Errorf("all repos failed to sync: %w", errors.Join(repoErrs...))
+	}
+	return results, repoErrs, nil
 }
 
 func (r *Runner) setupWorkspace() (workDir string, cleanup bool, err error) {
@@ -160,10 +170,12 @@ func (r *Runner) scanDir(ctx context.Context, source, root string, cache *regist
 		mu      sync.Mutex
 	)
 	runConcurrent(ctx, pending, r.parallelChecks, func(ctx context.Context, p pendingCheck) {
+		checkErr := ""
 		latest, err := registry.Latest(ctx, cache, p.ref.Protocol, p.ref.Repository, p.ref.Name, p.ref.CurrentVersion, r.scope)
 		if err != nil {
-			slog.Debug("version check failed", "dep", p.ref.Name, "error", err)
+			slog.Warn("version check failed", "dep", p.ref.Name, "repo", p.ref.Repository, "error", err)
 			latest = ""
+			checkErr = err.Error()
 		}
 
 		chart := p.ref.Chart
@@ -182,6 +194,7 @@ func (r *Runner) scanDir(ctx context.Context, source, root string, cache *regist
 			LatestVersion:   latest,
 			Scope:           string(r.scope),
 			UpdateAvailable: isNewer(latest, p.ref.CurrentVersion),
+			CheckError:      checkErr,
 			CheckedAt:       time.Now(),
 		})
 		mu.Unlock()
@@ -220,7 +233,7 @@ func cloneRepo(ctx context.Context, repo config.Repo, dest string) error {
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, "git", "clone", "--depth=1", "--single-branch", cloneURL(repo), dest)
+	cmd := exec.CommandContext(ctx, "git", "clone", "--depth=1", "--single-branch", repo.URL, dest)
 	cmd.Env = authEnv(repo)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git clone: %w\n%s", err, strings.TrimSpace(string(out)))
@@ -229,6 +242,12 @@ func cloneRepo(ctx context.Context, repo config.Repo, dest string) error {
 }
 
 func fetchRepo(ctx context.Context, repo config.Repo, dest string) error {
+	// Reset the remote URL in case a cached clone predates the current config
+	// (older versions embedded credentials in the URL; tokens also rotate).
+	setURL := exec.CommandContext(ctx, "git", "-C", dest, "remote", "set-url", "origin", repo.URL)
+	if out, err := setURL.CombinedOutput(); err != nil {
+		return fmt.Errorf("git remote set-url: %w\n%s", err, strings.TrimSpace(string(out)))
+	}
 	fetch := exec.CommandContext(ctx, "git", "-C", dest, "fetch", "--depth=1", "origin")
 	fetch.Env = authEnv(repo)
 	if out, err := fetch.CombinedOutput(); err != nil {
@@ -241,20 +260,26 @@ func fetchRepo(ctx context.Context, repo config.Repo, dest string) error {
 	return nil
 }
 
-func cloneURL(repo config.Repo) string {
-	u, err := url.Parse(repo.URL)
-	if err != nil || u.Scheme == "" {
-		return repo.URL
-	}
+// authEnv builds the git environment for a repo. HTTP credentials are passed
+// per-invocation via GIT_CONFIG_* (http.extraheader) so they end up neither in
+// the process argv nor persisted in the clone's .git/config.
+func authEnv(repo config.Repo) []string {
+	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	auth := repo.Auth
 	switch auth.Type {
+	case "ssh":
+		if auth.SSHKeyPath != "" {
+			env = append(env,
+				"GIT_SSH_COMMAND=ssh -i "+auth.SSHKeyPath+" -o StrictHostKeyChecking=accept-new -o BatchMode=yes",
+			)
+		}
 	case "token":
 		tok := auth.Token
 		if tok == "" && auth.TokenFile != "" {
 			tok = readCredFile(auth.TokenFile)
 		}
 		if tok != "" {
-			u.User = url.UserPassword("git", tok)
+			env = appendAuthHeader(env, "git", tok)
 		}
 	case "basic":
 		pass := auth.Password
@@ -262,20 +287,19 @@ func cloneURL(repo config.Repo) string {
 			pass = readCredFile(auth.PasswordFile)
 		}
 		if pass != "" {
-			u.User = url.UserPassword(auth.Username, pass)
+			env = appendAuthHeader(env, auth.Username, pass)
 		}
 	}
-	return u.String()
+	return env
 }
 
-func authEnv(repo config.Repo) []string {
-	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	if repo.Auth.Type == "ssh" && repo.Auth.SSHKeyPath != "" {
-		env = append(env,
-			"GIT_SSH_COMMAND=ssh -i "+repo.Auth.SSHKeyPath+" -o StrictHostKeyChecking=no -o BatchMode=yes",
-		)
-	}
-	return env
+func appendAuthHeader(env []string, user, pass string) []string {
+	cred := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
+	return append(env,
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=http.extraheader",
+		"GIT_CONFIG_VALUE_0=Authorization: Basic "+cred,
+	)
 }
 
 func readCredFile(path string) string {
@@ -306,13 +330,4 @@ func runConcurrent[T any](ctx context.Context, items []T, limit int, fn func(con
 		}()
 	}
 	wg.Wait()
-}
-
-func safeName(s string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' || r == '.' {
-			return r
-		}
-		return '-'
-	}, s)
 }

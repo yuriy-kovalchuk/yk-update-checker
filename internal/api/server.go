@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -52,14 +53,20 @@ func (s *Server) Run(ctx context.Context, svc scan.Service) error {
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
+	errCh := make(chan error, 1)
 	go func() {
 		slog.Info("server started", "addr", "http://localhost:"+s.port)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("server error", "error", err)
+			errCh <- err
 		}
 	}()
 
-	<-ctx.Done()
+	select {
+	case err := <-errCh:
+		// A dead listener must kill the process, not leave it running headless.
+		return fmt.Errorf("http server: %w", err)
+	case <-ctx.Done():
+	}
 	slog.Info("shutting down")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)

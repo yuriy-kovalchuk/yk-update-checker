@@ -13,6 +13,7 @@ type Result struct {
 	LatestVersion   string    `json:"latest_version"`
 	Scope           string    `json:"scope"`
 	UpdateAvailable bool      `json:"update_available"`
+	CheckError      string    `json:"check_error,omitempty"`
 	CheckedAt       time.Time `json:"checked_at"`
 }
 
@@ -22,5 +23,6 @@ type Status struct {
 	TriggerAvailable bool       `json:"trigger_available"`
 	LastScanAt       *time.Time `json:"last_scan_at,omitempty"`
 	ResultCount      int        `json:"result_count"`
+	LastError        string     `json:"last_error,omitempty"`
 	Version          string     `json:"version"`
 }

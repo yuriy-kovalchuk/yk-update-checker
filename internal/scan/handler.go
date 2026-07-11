@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/yuriy-kovalchuk/yk-update-checker/internal/trigger"
 )
 
 // Handler handles HTTP endpoints for scan operations.
@@ -25,16 +27,19 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/scan/results", h.storeResults)
 }
 
-// trigger initiates a scan (inline goroutine or K8s Job depending on deployment).
+// trigger initiates a scan (background goroutine or K8s Job depending on deployment).
 func (h *Handler) trigger(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.Trigger(r.Context()); err != nil {
 		var unavail *ErrTriggerUnavailable
-		if errors.As(err, &unavail) {
+		switch {
+		case errors.As(err, &unavail):
 			http.Error(w, "trigger not available", http.StatusServiceUnavailable)
-			return
+		case errors.Is(err, trigger.ErrAlreadyRunning):
+			writeJSON(w, http.StatusConflict, map[string]string{"status": "already_running"})
+		default:
+			slog.Error("trigger scan failed", "error", err)
+			http.Error(w, "failed to trigger scan", http.StatusInternalServerError)
 		}
-		slog.Error("trigger scan failed", "error", err)
-		http.Error(w, "failed to trigger scan", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "triggered"})

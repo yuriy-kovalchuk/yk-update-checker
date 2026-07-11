@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -31,7 +33,9 @@ func main() {
 }
 
 func run() error {
-	if len(os.Args) < 2 || os.Args[1] == "serve" {
+	// Default to serve when no subcommand is given, including bare flags
+	// like `update-checker -port 9090`.
+	if len(os.Args) < 2 || strings.HasPrefix(os.Args[1], "-") {
 		return runServe()
 	}
 	switch os.Args[1] {
@@ -77,18 +81,18 @@ func runServe() error {
 	runner := buildRunner(cfg)
 	svc := scan.NewService(runner, repo)
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	// Prefer K8s trigger when a CronJob name is provided; fall back to inline.
 	var trig trigger.Trigger
 	if *cronJobName != "" {
 		trig = trigger.NewKubernetesTrigger(*cronJobName)
 	}
 	if trig == nil || !trig.Available() {
-		trig = trigger.NewInline(svc.RunScan)
+		trig = trigger.NewInline(ctx, svc.RunScan)
 	}
 	svc.SetTrigger(trig)
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	// Start optional internal scheduler.
 	if *interval > 0 {
@@ -123,19 +127,30 @@ func runScan() error {
 	defer stop()
 
 	runner := buildRunner(cfg)
-	results, err := runner.Run(ctx)
+	results, repoErrs, err := runner.Run(ctx)
 	if err != nil {
 		return fmt.Errorf("scan: %w", err)
 	}
 
 	if *serverURL != "" {
-		return postResults(ctx, *serverURL, results)
+		if err := postResults(ctx, *serverURL, results); err != nil {
+			return err
+		}
+	} else {
+		// No server URL: print JSON to stdout.
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(results); err != nil {
+			return err
+		}
 	}
 
-	// No server URL: print JSON to stdout.
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	return enc.Encode(results)
+	// Report partial repo failures after delivering what was scanned, so the
+	// Job exits non-zero and the failure is visible.
+	if len(repoErrs) > 0 {
+		return fmt.Errorf("scan finished with %d repo failure(s): %w", len(repoErrs), errors.Join(repoErrs...))
+	}
+	return nil
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

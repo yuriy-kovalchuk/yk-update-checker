@@ -229,12 +229,14 @@
     .badge-helm   { background: var(--primary-bg); color: var(--primary); }
     .badge-fluxcd { background: var(--purple-bg);  color: var(--purple);  }
     .badge-https  { background: var(--green-bg);   color: var(--green);   }
+    .badge-http   { background: var(--green-bg);   color: var(--green);   }
     .badge-oci    { background: var(--yellow-bg);  color: var(--yellow);  }
 
     .v-current { color: var(--text-muted); }
     .v-latest  { color: var(--green); font-weight: 500; }
     .v-update  { color: var(--yellow); font-weight: 500; }
     .v-na      { color: var(--text-muted); opacity: .5; }
+    .v-err     { color: var(--red); font-weight: 500; cursor: help; }
 
     .empty {
       padding: 60px 16px;
@@ -337,6 +339,7 @@
         <option value="">All</option>
         <option value="1">Updates only</option>
         <option value="0">Up to date</option>
+        <option value="err">Check errors</option>
       </select>
     </div>
 
@@ -419,9 +422,14 @@ async function triggerScan() {
     toast('Scan triggered', 'ok');
     startPoll();
   } catch (e) {
-    toast('Failed to trigger scan', 'err');
-    setScanning(false);
-    document.getElementById('scan-btn').disabled = false;
+    if (e.message === '409') {
+      toast('Scan already in progress', 'ok');
+      startPoll();
+    } else {
+      toast('Failed to trigger scan', 'err');
+      setScanning(false);
+      document.getElementById('scan-btn').disabled = false;
+    }
   }
 }
 
@@ -458,9 +466,10 @@ function setLastScan(iso) {
 function updateStats() {
   const total   = results.length;
   const updates = results.filter(r => r.update_available).length;
+  const errors  = results.filter(r => r.check_error).length;
   document.getElementById('s-total').textContent   = total   || '-';
   document.getElementById('s-updates').textContent = updates || '-';
-  document.getElementById('s-ok').textContent      = (total - updates) || '-';
+  document.getElementById('s-ok').textContent      = (total - updates - errors) || '-';
   document.getElementById('s-sources').textContent = new Set(results.map(r => r.source)).size || '-';
 }
 
@@ -481,7 +490,8 @@ function render() {
   let rows = results.filter(r => {
     if (ft && r.type !== ft) return false;
     if (fu === '1' && !r.update_available) return false;
-    if (fu === '0' &&  r.update_available) return false;
+    if (fu === '0' && (r.update_available || r.check_error)) return false;
+    if (fu === 'err' && !r.check_error) return false;
     if (q) {
       const blob = [r.source, r.chart, r.dependency, r.current_version, r.latest_version].join(' ').toLowerCase();
       if (!blob.includes(q)) return false;
@@ -507,9 +517,14 @@ function render() {
 
   tbody.innerHTML = rows.map(r => {
     const upd    = r.update_available;
-    const latest = r.latest_version
-      ? `<span class="${upd ? 'v-update' : 'v-latest'}">${esc(r.latest_version)}</span>`
-      : `<span class="v-na">-</span>`;
+    let latest;
+    if (r.check_error) {
+      latest = `<span class="v-err" title="${esc(r.check_error)}">check failed</span>`;
+    } else if (r.latest_version) {
+      latest = `<span class="${upd ? 'v-update' : 'v-latest'}">${esc(r.latest_version)}</span>`;
+    } else {
+      latest = `<span class="v-na">-</span>`;
+    }
 
     return `<tr class="${upd ? 'has-update' : ''}">
       <td>${esc(r.source)}</td>

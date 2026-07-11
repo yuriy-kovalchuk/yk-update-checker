@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
@@ -61,6 +63,19 @@ func Load(path string) (*Config, error) {
 	if len(cfg.Repos) == 0 {
 		return nil, fmt.Errorf("config: at least one repo is required")
 	}
+	// Repos are checked out into directories derived from their names; a
+	// collision would make two repos clone into the same path concurrently.
+	seen := make(map[string]string, len(cfg.Repos))
+	for _, repo := range cfg.Repos {
+		if repo.Name == "" {
+			return nil, fmt.Errorf("config: every repo needs a name")
+		}
+		dir := SafeName(repo.Name)
+		if other, ok := seen[dir]; ok {
+			return nil, fmt.Errorf("config: repo names %q and %q collide (both map to directory %q)", other, repo.Name, dir)
+		}
+		seen[dir] = repo.Name
+	}
 	if cfg.UpdateType == "" {
 		cfg.UpdateType = "all"
 	}
@@ -68,4 +83,14 @@ func Load(path string) (*Config, error) {
 		cfg.ParallelChecks = DefaultParallelChecks
 	}
 	return &cfg, nil
+}
+
+// SafeName maps a repo name to a filesystem-safe directory name.
+func SafeName(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' || r == '.' {
+			return r
+		}
+		return '-'
+	}, s)
 }

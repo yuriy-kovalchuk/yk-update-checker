@@ -46,10 +46,17 @@ spec:
             - name: config
               mountPath: /etc/update-checker
               readOnly: true
-          {{- with .Values.extraEnv }}
           env:
+            # Keep the Go heap under the container limit so the GC works harder
+            # near the limit instead of the kernel OOMKilling the pod mid-scan.
+            - name: GOMEMLIMIT
+              valueFrom:
+                resourceFieldRef:
+                  containerName: update-checker
+                  resource: limits.memory
+            {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
-          {{- end }}
+            {{- end }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           resources:

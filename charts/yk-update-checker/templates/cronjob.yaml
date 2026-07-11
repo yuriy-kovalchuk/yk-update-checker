@@ -40,6 +40,14 @@ spec:
               env:
                 - name: SCAN_TRIGGER
                   value: scheduled
+                # Keep the Go heap under the container limit so the GC works
+                # harder near the limit instead of the kernel OOMKilling the
+                # scan partway through.
+                - name: GOMEMLIMIT
+                  valueFrom:
+                    resourceFieldRef:
+                      containerName: scanner
+                      resource: limits.memory
                 {{- with .Values.scanner.extraEnv }}
                 {{- toYaml . | nindent 16 }}
                 {{- end }}

@@ -2,6 +2,9 @@ package extractor
 
 import (
 	"bytes"
+	"errors"
+	"io"
+	"log/slog"
 	"sync"
 
 	"gopkg.in/yaml.v3"
@@ -109,6 +112,9 @@ func (f *FluxCD) PrepareFile(_ string, content []byte) error {
 	for {
 		var doc fluxSourceResource
 		if err := dec.Decode(&doc); err != nil {
+			if keepDecoding(err, "fluxcd prepare") {
+				continue
+			}
 			break
 		}
 
@@ -141,7 +147,10 @@ func (f *FluxCD) Extract(_ string, content []byte) (string, []ChartRef, error) {
 	for {
 		var hr helmReleaseResource
 		if err := dec.Decode(&hr); err != nil {
-			break // io.EOF or malformed document — stop iterating
+			if keepDecoding(err, "fluxcd extract") {
+				continue
+			}
+			break
 		}
 		if hr.Metadata.Name == "" {
 			continue // not a HelmRelease (or an empty document)
@@ -149,6 +158,22 @@ func (f *FluxCD) Extract(_ string, content []byte) (string, []ChartRef, error) {
 		all = append(all, f.refsFromRelease(hr)...)
 	}
 	return "", all, nil
+}
+
+// keepDecoding reports whether a multi-document decode loop can continue past
+// err. Type mismatches (e.g. a Flux HelmChart whose spec.chart is a string)
+// consume their document, so later documents in the file must still be read;
+// syntax errors and io.EOF end the file.
+func keepDecoding(err error, op string) bool {
+	var typeErr *yaml.TypeError
+	if errors.As(err, &typeErr) {
+		slog.Warn("skipping malformed YAML document", "op", op, "error", err)
+		return true
+	}
+	if !errors.Is(err, io.EOF) {
+		slog.Warn("stopping YAML parse", "op", op, "error", err)
+	}
+	return false
 }
 
 // refsFromRelease extracts ChartRefs from a single HelmRelease document.

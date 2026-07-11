@@ -2,6 +2,7 @@ package scan
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -64,23 +65,32 @@ func (s *service) RunScan(ctx context.Context) error {
 	}()
 
 	slog.Info("scan started")
-	results, err := s.runner.Run(ctx)
+	results, repoErrs, err := s.runner.Run(ctx)
 	if err != nil {
-		s.mu.Lock()
-		s.lastErr = err.Error()
-		s.mu.Unlock()
+		// Nothing was scanned (cancelled or all repos failed): keep the
+		// previous results instead of overwriting them with an empty set.
+		s.setLastError(err.Error())
 		return err
 	}
 
-	s.mu.Lock()
-	s.lastErr = ""
-	s.mu.Unlock()
+	lastErr := ""
+	if len(repoErrs) > 0 {
+		lastErr = errors.Join(repoErrs...).Error()
+		slog.Warn("scan completed with repo failures", "failed", len(repoErrs))
+	}
+	s.setLastError(lastErr)
 
 	if err := s.repo.Save(results, time.Now()); err != nil {
 		return err
 	}
 	slog.Info("scan completed", "results", len(results))
 	return nil
+}
+
+func (s *service) setLastError(msg string) {
+	s.mu.Lock()
+	s.lastErr = msg
+	s.mu.Unlock()
 }
 
 func (s *service) StoreResults(_ context.Context, results []Result, scannedAt time.Time) error {
@@ -92,25 +102,31 @@ func (s *service) GetResults(_ context.Context) ([]Result, error) {
 	return results, err
 }
 
-func (s *service) GetStatus(_ context.Context) Status {
+func (s *service) GetStatus(ctx context.Context) Status {
 	s.mu.Lock()
 	scanning := s.scanning
+	lastErr := s.lastErr
+	trig := s.trig
 	s.mu.Unlock()
 
 	results, scannedAt, _ := s.repo.Load()
 
 	trigAvailable := false
-	s.mu.Lock()
-	if s.trig != nil {
-		trigAvailable = s.trig.Available()
+	if trig != nil {
+		trigAvailable = trig.Available()
+		// In K8s CronJob mode the scan runs in a separate Job pod; ask the
+		// trigger so the dashboard shows "scanning" while that Job is active.
+		if !scanning {
+			scanning = trig.Running(ctx)
+		}
 	}
-	s.mu.Unlock()
 
 	return Status{
 		Scanning:         scanning,
 		TriggerAvailable: trigAvailable,
 		LastScanAt:       scannedAt,
 		ResultCount:      len(results),
+		LastError:        lastErr,
 		Version:          version.Version,
 	}
 }
