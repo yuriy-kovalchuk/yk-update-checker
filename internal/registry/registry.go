@@ -170,6 +170,34 @@ func Latest(ctx context.Context, cache *IndexCache, protocol, repoURL, chartName
 	}
 }
 
+// resolveCurrent turns the version declared in a manifest into a concrete
+// semver. Helm allows ranges ("29.x", "~1.2.0", ">=1 <2"); for those, the
+// deployed version is the newest stable registry version matching the
+// constraint, so updates are measured from there.
+func resolveCurrent(currentVersion string, tags []string) (*semver.Version, error) {
+	if v, err := semver.NewVersion(currentVersion); err == nil {
+		return v, nil
+	}
+	c, err := semver.NewConstraint(currentVersion)
+	if err != nil {
+		return nil, fmt.Errorf("invalid current version %q: %w", currentVersion, err)
+	}
+	var best *semver.Version
+	for _, t := range tags {
+		v, err := semver.NewVersion(t)
+		if err != nil || v.Prerelease() != "" {
+			continue
+		}
+		if c.Check(v) && (best == nil || v.GreaterThan(best)) {
+			best = v
+		}
+	}
+	if best == nil {
+		return nil, fmt.Errorf("no registry version matches constraint %q", currentVersion)
+	}
+	return best, nil
+}
+
 func latestFromTags(current *semver.Version, tags []string, scope Scope) string {
 	var candidates []*semver.Version
 	for _, t := range tags {
@@ -248,13 +276,13 @@ func latestHTTP(ctx context.Context, cache *IndexCache, scheme, repoURL, chartNa
 	if !ok {
 		return "", fmt.Errorf("chart %q not found in index at %s", chartName, strings.TrimSuffix(repoURL, "/"))
 	}
-	current, err := semver.NewVersion(currentVersion)
-	if err != nil {
-		return "", fmt.Errorf("invalid current version %q: %w", currentVersion, err)
-	}
 	tags := make([]string, 0, len(entries))
 	for _, e := range entries {
 		tags = append(tags, e.Version)
+	}
+	current, err := resolveCurrent(currentVersion, tags)
+	if err != nil {
+		return "", err
 	}
 	return latestFromTags(current, tags, scope), nil
 }
@@ -265,9 +293,9 @@ func latestOCI(ctx context.Context, cache *IndexCache, repoURL, chartName, curre
 	if err != nil {
 		return "", err
 	}
-	current, err := semver.NewVersion(currentVersion)
+	current, err := resolveCurrent(currentVersion, tags)
 	if err != nil {
-		return "", fmt.Errorf("invalid current version %q: %w", currentVersion, err)
+		return "", err
 	}
 	return latestFromTags(current, tags, scope), nil
 }

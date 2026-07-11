@@ -146,6 +146,69 @@ func TestOCITagsAreCached(t *testing.T) {
 	}
 }
 
+func TestResolveCurrent(t *testing.T) {
+	tags := []string{"29.1.0", "29.5.0", "30.0.0", "30.1.0-rc.1", "not-semver"}
+	cases := []struct {
+		current string
+		want    string
+		wantErr bool
+	}{
+		{current: "29.1.0", want: "29.1.0"}, // exact versions pass through untouched
+		{current: "29.x", want: "29.5.0"},   // range resolves to newest match
+		{current: "~29.1.0", want: "29.1.0"},
+		{current: ">=29 <31", want: "30.0.0"}, // 30.1.0-rc.1 is a prerelease
+		{current: "99.x", wantErr: true},      // nothing matches
+		{current: "garbage version", wantErr: true},
+	}
+	for _, tc := range cases {
+		got, err := resolveCurrent(tc.current, tags)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("resolveCurrent(%q): want error, got %v", tc.current, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("resolveCurrent(%q): %v", tc.current, err)
+			continue
+		}
+		if got.Original() != tc.want {
+			t.Errorf("resolveCurrent(%q) = %s, want %s", tc.current, got.Original(), tc.want)
+		}
+	}
+}
+
+func TestLatestWithRangeVersion(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`entries:
+  prometheus-operator-crds:
+  - version: 29.1.0
+  - version: 29.5.0
+  - version: 30.0.0
+`))
+	}))
+	defer ts.Close()
+	repoURL := strings.TrimPrefix(ts.URL, "http://")
+
+	// Scope all: deployed is 29.5.0 (newest matching 29.x), so 30.0.0 is an update.
+	latest, err := Latest(context.Background(), NewIndexCache(), "http", repoURL, "prometheus-operator-crds", "29.x", ScopeAll)
+	if err != nil {
+		t.Fatalf("Latest(29.x, all): %v", err)
+	}
+	if latest != "30.0.0" {
+		t.Errorf("latest = %q, want 30.0.0", latest)
+	}
+
+	// Scope minor: nothing newer within major 29 — up to date.
+	latest, err = Latest(context.Background(), NewIndexCache(), "http", repoURL, "prometheus-operator-crds", "29.x", ScopeMinor)
+	if err != nil {
+		t.Fatalf("Latest(29.x, minor): %v", err)
+	}
+	if latest != "" {
+		t.Errorf("latest = %q, want up to date (empty)", latest)
+	}
+}
+
 func TestLatestFromTags(t *testing.T) {
 	tags := []string{"1.0.0", "1.0.5", "1.2.0", "2.1.0", "3.0.0-rc.1", "not-semver"}
 	cases := []struct {
