@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+- **Dependencies**: bumped `google/go-containerregistry` v0.21.7 → v0.21.8
+- **Dependencies**: bumped `k8s.io/api`, `k8s.io/apimachinery`, `k8s.io/client-go` v0.36.2 → v0.36.3
+
 ## [0.1.1-alpha] - 2026-06-05
 
 ### Changed
