@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-04
+
 ### Changed
 - **Dependencies**: bumped `google/go-containerregistry` v0.21.7 → v0.21.8
 - **Dependencies**: bumped `k8s.io/api`, `k8s.io/apimachinery`, `k8s.io/client-go` v0.36.2 → v0.36.3
@@ -35,5 +37,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Single Helm chart with two workloads: one Deployment (`serve`) and one CronJob (`scan`)
 - Multi-architecture Docker image (`linux/amd64`, `linux/arm64`) published to GHCR
 
-[Unreleased]: https://github.com/yuriy-kovalchuk/yk-update-checker/compare/v0.1.0-alpha...HEAD
+[Unreleased]: https://github.com/yuriy-kovalchuk/yk-update-checker/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/yuriy-kovalchuk/yk-update-checker/releases/tag/v0.2.2
 [0.1.0-alpha]: https://github.com/yuriy-kovalchuk/yk-update-checker/releases/tag/v0.1.0-alpha
