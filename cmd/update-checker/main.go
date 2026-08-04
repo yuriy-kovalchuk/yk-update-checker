@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,6 +19,7 @@ import (
 	"github.com/yuriy-kovalchuk/yk-update-checker/internal/api"
 	"github.com/yuriy-kovalchuk/yk-update-checker/internal/config"
 	"github.com/yuriy-kovalchuk/yk-update-checker/internal/extractor"
+	"github.com/yuriy-kovalchuk/yk-update-checker/internal/metrics"
 	"github.com/yuriy-kovalchuk/yk-update-checker/internal/registry"
 	"github.com/yuriy-kovalchuk/yk-update-checker/internal/scan"
 	"github.com/yuriy-kovalchuk/yk-update-checker/internal/scheduler"
@@ -78,7 +80,13 @@ func runServe() error {
 	}
 
 	repo := scan.NewRepository()
-	runner := buildRunner(cfg)
+	ttl, err := cfg.RegistryCacheDuration()
+	if err != nil {
+		return err
+	}
+	// One cache for the process lifetime: scans closer together than the TTL
+	// reuse recently fetched registry data instead of re-downloading it.
+	runner := buildRunner(cfg, registry.NewIndexCache(ttl))
 	svc := scan.NewService(runner, repo)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -100,7 +108,13 @@ func runServe() error {
 		go s.Start(ctx)
 	}
 
+	// Register Prometheus metrics only when running inside Kubernetes.
 	srv := api.New(*port)
+	if metrics.InCluster() {
+		exp := metrics.NewExporter(repo)
+		svc.SetMeter(exp.Gauge().Record) // record scan success/failure + duration
+		srv.SetHandler(exp.Handler())    // mount /metrics
+	}
 	return srv.Run(ctx, svc)
 }
 
@@ -126,14 +140,23 @@ func runScan() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	runner := buildRunner(cfg)
+	start := time.Now()
+	// One-shot process: the cache only lives for this run, so no TTL.
+	runner := buildRunner(cfg, registry.NewIndexCache(0))
 	results, repoErrs, err := runner.Run(ctx)
 	if err != nil {
+		if *serverURL != "" {
+			// Best-effort: let the server record the failed run even though
+			// there are no results to report. Don't let this mask the real error.
+			if perr := postResults(ctx, *serverURL, nil, "failure", time.Since(start)); perr != nil {
+				slog.Error("failed to report scan failure to server", "error", perr)
+			}
+		}
 		return fmt.Errorf("scan: %w", err)
 	}
 
 	if *serverURL != "" {
-		if err := postResults(ctx, *serverURL, results); err != nil {
+		if err := postResults(ctx, *serverURL, results, "success", time.Since(start)); err != nil {
 			return err
 		}
 	} else {
@@ -155,7 +178,7 @@ func runScan() error {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-func buildRunner(cfg *config.Config) *scan.Runner {
+func buildRunner(cfg *config.Config, cache *registry.IndexCache) *scan.Runner {
 	scope := registry.ParseScope(cfg.UpdateType)
 	newExtractors := func() []extractor.Extractor {
 		return []extractor.Extractor{
@@ -163,18 +186,22 @@ func buildRunner(cfg *config.Config) *scan.Runner {
 			extractor.NewFluxCD(),
 		}
 	}
-	return scan.NewRunner(cfg.Repos, newExtractors, scope, cfg.ParallelChecks, cfg.GitCacheDir)
+	return scan.NewRunner(cfg.Repos, newExtractors, scope, cfg.ParallelChecks, cfg.GitCacheDir, cache)
 }
 
 var scanClient = &http.Client{Timeout: 30 * time.Second}
 
-func postResults(ctx context.Context, serverURL string, results []scan.Result) error {
+func postResults(ctx context.Context, serverURL string, results []scan.Result, status string, elapsed time.Duration) error {
 	payload := struct {
-		Results   []scan.Result `json:"results"`
-		ScannedAt time.Time     `json:"scanned_at"`
+		Results         []scan.Result `json:"results"`
+		ScannedAt       time.Time     `json:"scanned_at"`
+		Status          string        `json:"status"`
+		DurationSeconds float64       `json:"duration_seconds"`
 	}{
-		Results:   results,
-		ScannedAt: time.Now(),
+		Results:         results,
+		ScannedAt:       time.Now(),
+		Status:          status,
+		DurationSeconds: elapsed.Seconds(),
 	}
 
 	body, err := json.Marshal(payload)

@@ -1,0 +1,19 @@
+{{- if .Values.grafana.dashboard.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "yk-update-checker.fullname" . }}-dashboard
+  labels:
+    {{- include "yk-update-checker.labels" . | nindent 4 }}
+    grafana_dashboard: "1"
+    {{- with .Values.grafana.dashboard.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.grafana.dashboard.folder }}
+  annotations:
+    k8s-sidecar-target-directory: {{ printf "%s/%s" (trimSuffix "/" $.Values.grafana.dashboard.sidecarBaseDir) . | quote }}
+  {{- end }}
+data:
+  update-checker.json: |-
+{{ .Files.Get "dashboards/update-checker.json" | indent 4 }}
+{{- end }}

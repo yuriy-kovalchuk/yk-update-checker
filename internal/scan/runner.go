@@ -28,16 +28,20 @@ type Runner struct {
 	scope          registry.Scope
 	parallelChecks int
 	gitCacheDir    string
+	cache          *registry.IndexCache
 }
 
 // NewRunner creates a Runner that clones the given repos and scans them for outdated dependencies.
-func NewRunner(repos []config.Repo, newExtractors func() []extractor.Extractor, scope registry.Scope, parallelChecks int, gitCacheDir string) *Runner {
+// cache is shared across Runs: serve mode passes one long-lived TTL-bounded
+// cache, one-shot scans pass a per-run cache.
+func NewRunner(repos []config.Repo, newExtractors func() []extractor.Extractor, scope registry.Scope, parallelChecks int, gitCacheDir string, cache *registry.IndexCache) *Runner {
 	return &Runner{
 		repos:          repos,
 		newExtractors:  newExtractors,
 		scope:          scope,
 		parallelChecks: parallelChecks,
 		gitCacheDir:    gitCacheDir,
+		cache:          cache,
 	}
 }
 
@@ -59,8 +63,6 @@ func (r *Runner) Run(ctx context.Context) (results []Result, repoErrs []error, e
 		}()
 	}
 
-	cache := registry.NewIndexCache()
-
 	var mu sync.Mutex
 
 	runConcurrent(ctx, r.repos, r.parallelChecks, func(ctx context.Context, repo config.Repo) {
@@ -80,7 +82,7 @@ func (r *Runner) Run(ctx context.Context) (results []Result, repoErrs []error, e
 			scanPath = filepath.Join(dest, repo.Path)
 		}
 
-		repoResults := r.scanDir(ctx, repo.Name, scanPath, cache)
+		repoResults := r.scanDir(ctx, repo.Name, scanPath, r.cache)
 		slog.Info("scan done", "repo", repo.Name, "results", len(repoResults))
 
 		mu.Lock()
@@ -192,7 +194,7 @@ func (r *Runner) scanDir(ctx context.Context, source, root string, cache *regist
 			Protocol:        p.ref.Protocol,
 			CurrentVersion:  p.ref.CurrentVersion,
 			LatestVersion:   latest,
-			Scope:           string(r.scope),
+			Scope:           classifyScope(p.ref.CurrentVersion, latest),
 			UpdateAvailable: isNewer(latest, p.ref.CurrentVersion),
 			CheckError:      checkErr,
 			CheckedAt:       time.Now(),
@@ -208,16 +210,50 @@ func isYAML(path string) bool {
 	return ext == ".yaml" || ext == ".yml"
 }
 
+// parseVersionPair parses current and latest as semver. ok is false when
+// either fails to parse (e.g. git SHAs) — callers fall back to string
+// comparison in that case. Both isNewer and classifyScope compare the same
+// pair of versions and must stay consistent with each other.
+func parseVersionPair(current, latest string) (l, c *semver.Version, ok bool) {
+	l, err1 := semver.NewVersion(latest)
+	c, err2 := semver.NewVersion(current)
+	if err1 != nil || err2 != nil {
+		return nil, nil, false
+	}
+	return l, c, true
+}
+
 func isNewer(latest, current string) bool {
 	if latest == "" {
 		return false
 	}
-	l, err1 := semver.NewVersion(latest)
-	c, err2 := semver.NewVersion(current)
-	if err1 != nil || err2 != nil {
+	l, c, ok := parseVersionPair(current, latest)
+	if !ok {
 		return latest != current
 	}
 	return l.GreaterThan(c)
+}
+
+// classifyScope determines the bump size (major/minor/patch) between current and
+// latest versions.  Returns "unknown" when the version strings are not parseable
+// as semver, or empty string when no newer version exists.
+func classifyScope(current, latest string) string {
+	if latest == "" || current == latest {
+		return ""
+	}
+	l, c, ok := parseVersionPair(current, latest)
+	if !ok {
+		// Non-semver versions (e.g. git SHAs); can't classify the bump size.
+		return "unknown"
+	}
+	switch {
+	case l.Major() != c.Major():
+		return "major"
+	case l.Minor() != c.Minor():
+		return "minor"
+	default:
+		return "patch"
+	}
 }
 
 // ── Git helpers ───────────────────────────────────────────────────────────────

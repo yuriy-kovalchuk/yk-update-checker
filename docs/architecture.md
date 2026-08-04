@@ -61,6 +61,8 @@ The trigger implementation is selected at startup: `KubernetesTrigger` if `--cro
 
 Results are held in memory (`scan.Repository`, a `sync.RWMutex`-guarded slice). There is no database. Results are lost on pod restart; the next scheduled or manual scan repopulates them.
 
+Fetched registry data (Helm `index.yaml` files, OCI tag lists) is cached in a `registry.IndexCache`. Every scan deduplicates lookups per unique registry URL (singleflight + memoized errors), and in `serve` mode the cache outlives individual scans: entries are reused until `registry_cache_ttl` expires (default `15m`, `0` = per-scan cache), so back-to-back scans (manual trigger right after a scheduled run, CronJob retries) skip the index re-download. One-shot `scan` runs always use a per-run cache.
+
 ## Package layout
 
 ```

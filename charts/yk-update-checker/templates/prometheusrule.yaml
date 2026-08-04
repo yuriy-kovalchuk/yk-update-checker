@@ -1,0 +1,37 @@
+{{- $stale := .Values.metrics.prometheusRule.staleScan }}
+{{- if and .Values.metrics.prometheusRule.enabled (or .Values.metrics.prometheusRule.rules $stale.enabled) }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "yk-update-checker.fullname" . }}
+  labels:
+    {{- include "yk-update-checker.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: update-checker-alerts
+      rules:
+        {{- range $rule := .Values.metrics.prometheusRule.rules }}
+        - alert: OutdatedDependency{{ $rule.scope | title }}
+          expr: 'update_checker_dependency_outdated_info{scope="{{ $rule.scope }}"}'
+          for: 5m
+          labels:
+            severity: {{ $rule.severity }}
+          annotations:
+            summary: >-
+              {{ "{{" }} $labels.source {{ "}}" }}:
+              {{ "{{" }} $labels.chart {{ "}}" }}/{{ "{{" }} $labels.dependency {{ "}}" }}
+              {{ "{{" }} $labels.current_version {{ "}}" }} ->
+              {{ "{{" }} $labels.latest_version {{ "}}" }} ({{ "{{" }} $labels.scope {{ "}}" }})
+            description: 'Outdated dependency in source {{ "{{" }} $labels.source {{ "}}" }}'
+        {{- end }}
+        {{- if $stale.enabled }}
+        - alert: UpdateCheckerScanStale
+          expr: 'time() - update_checker_last_scan_time > {{ $stale.thresholdSeconds }}'
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: 'No successful update-checker scan for over {{ $stale.thresholdSeconds }}s'
+            description: 'The last successful scan is older than {{ $stale.thresholdSeconds }}s - the scanner may be down or failing.'
+        {{- end }}
+{{- end }}

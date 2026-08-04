@@ -1,0 +1,319 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": null,
+          "editorMode": "code",
+          "expr": "count(update_checker_dependency_outdated_info)",
+          "legendFormat": "__auto",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Total Outdated",
+      "type": "stat"
+    },
+    {
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "barAlignment": 0,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "valueOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 25200
+              },
+              {
+                "color": "red",
+                "value": 46800
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": null,
+          "editorMode": "code",
+          "expr": "time() - update_checker_last_scan_time",
+          "format": "time_series",
+          "instant": false,
+          "legendFormat": "Time since last scan",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Last Scan",
+      "type": "stat"
+    },
+    {
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": true,
+            "footers": false,
+            "wrap": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 14,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
+      "id": 3,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": []
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": null,
+          "editorMode": "code",
+          "exemplar": false,
+          "expr": "update_checker_dependency_outdated_info{scope=~\"$scope\"}",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "__auto",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Outdated Dependencies",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "Value": true,
+              "job": true,
+              "namespace": true,
+              "pod": true,
+              "service": true,
+              "endpoint": true,
+              "container": true,
+              "instance": true,
+              "cluster": true,
+              "k8s_cluster_name": true
+            },
+            "indexByName": {
+              "source": 0,
+              "chart": 1,
+              "dependency": 2,
+              "type": 3,
+              "protocol": 4,
+              "current_version": 5,
+              "latest_version": 6,
+              "scope": 7
+            },
+            "renameByName": {
+              "source": "Source",
+              "chart": "Chart",
+              "dependency": "Dependency",
+              "type": "Type",
+              "protocol": "Protocol",
+              "current_version": "Current",
+              "latest_version": "Latest",
+              "scope": "Scope"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    }
+  ],
+  "refresh": "",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": [
+    "yk-update-checker"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "text": "All",
+          "value": ".+"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Scope",
+        "multi": false,
+        "name": "scope",
+        "options": [
+          {
+            "text": "All",
+            "value": ".+",
+            "selected": true
+          },
+          {
+            "text": "major",
+            "value": "major"
+          },
+          {
+            "text": "minor",
+            "value": "minor"
+          },
+          {
+            "text": "patch",
+            "value": "patch"
+          },
+          {
+            "text": "unknown",
+            "value": "unknown"
+          }
+        ],
+        "query": "All : .+,major : major,minor : minor,patch : patch,unknown : unknown",
+        "skipUrlSync": false,
+        "type": "custom"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Update Checker",
+  "uid": "yk-update-checker",
+  "version": 1
+}

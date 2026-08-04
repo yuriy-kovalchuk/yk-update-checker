@@ -76,7 +76,7 @@ Supported auth types: `token`, `basic`, `ssh`. See `examples/config.example.yaml
 
 ```yaml
 scanner:
-  schedule: "0 */6 * * *"   # CronJob schedule (default: every 6h)
+  schedule: "0 0 * * *"     # CronJob schedule (default: daily at 00:00)
   suspend: false             # suspend the CronJob without deleting it
 
 ingress:

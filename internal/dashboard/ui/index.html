@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Update Checker</title>
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'%3E%3Cpath d='M12 2L2 7l10 5 10-5-10-5z' stroke='%2358a6ff' stroke-width='1.5' stroke-linejoin='round'/%3E%3Cpath d='M2 17l10 5 10-5' stroke='%2358a6ff' stroke-width='1.5' stroke-linejoin='round'/%3E%3Cpath d='M2 12l10 5 10-5' stroke='%2358a6ff' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <style>
     :root {
       --bg:          #0d1117;
@@ -90,6 +90,21 @@
     .chip.scanning .chip-dot { animation: blink 1.2s ease-in-out infinite; }
 
     @keyframes blink { 0%,100% { opacity:1 } 50% { opacity:.3 } }
+
+    .scan-error {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      margin-bottom: 16px;
+      border-radius: var(--radius);
+      border: 1px solid rgba(248, 81, 73, .4);
+      background: rgba(248, 81, 73, .12);
+      color: var(--red);
+      font-size: 13px;
+    }
+
+    .scan-error.hidden { display: none; }
 
     .btn {
       display: inline-flex;
@@ -279,11 +294,7 @@
 
 <header class="app-bar">
   <div class="app-bar-brand">
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-      <path d="M12 2L2 7l10 5 10-5-10-5z" stroke="#58a6ff" stroke-width="1.5" stroke-linejoin="round"/>
-      <path d="M2 17l10 5 10-5" stroke="#58a6ff" stroke-width="1.5" stroke-linejoin="round"/>
-      <path d="M2 12l10 5 10-5" stroke="#58a6ff" stroke-width="1.5" stroke-linejoin="round"/>
-    </svg>
+    <img src="/favicon.svg" width="24" height="24" alt="" />
     Update Checker
   </div>
   <span id="version-text" class="app-bar-version"></span>
@@ -301,6 +312,15 @@
 </header>
 
 <main class="page">
+  <div id="scan-error" class="scan-error hidden">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+      <line x1="12" y1="9" x2="12" y2="13"/>
+      <line x1="12" y1="17" x2="12.01" y2="17"/>
+    </svg>
+    <span id="scan-error-text"></span>
+  </div>
+
   <div class="stats">
     <div class="stat-card">
       <div class="stat-label">Total charts</div>
@@ -334,6 +354,13 @@
         <option value="">All types</option>
         <option value="helm">Helm</option>
         <option value="fluxcd">FluxCD</option>
+      </select>
+      <select class="filter-sel" id="f-scope" onchange="render()">
+        <option value="">All scopes</option>
+        <option value="major">Major</option>
+        <option value="minor">Minor</option>
+        <option value="patch">Patch</option>
+        <option value="unknown">Unknown</option>
       </select>
       <select class="filter-sel" id="f-upd" onchange="render()">
         <option value="">All</option>
@@ -400,6 +427,8 @@ async function checkStatus() {
     if (st.last_scan_at) {
       setLastScan(st.last_scan_at);
     }
+
+    setScanError(st.last_error);
   } catch (_) {}
 }
 
@@ -444,6 +473,7 @@ function startPoll() {
         setScanning(false);
         document.getElementById('scan-btn').disabled = false;
         if (st.last_scan_at) setLastScan(st.last_scan_at);
+        setScanError(st.last_error);
         await loadResults();
         toast('Scan complete — ' + st.result_count + ' results', 'ok');
       }
@@ -461,6 +491,17 @@ function setScanning(on) {
 function setLastScan(iso) {
   if (!iso) return;
   document.getElementById('last-scan').textContent = 'Last scan: ' + new Date(iso).toLocaleString();
+}
+
+function setScanError(err) {
+  const el  = document.getElementById('scan-error');
+  const txt = document.getElementById('scan-error-text');
+  if (err) {
+    txt.textContent = 'Last scan error: ' + err;
+    el.classList.remove('hidden');
+  } else {
+    el.classList.add('hidden');
+  }
 }
 
 function updateStats() {
@@ -483,12 +524,14 @@ document.getElementById('thead-row').addEventListener('click', e => {
 });
 
 function render() {
-  const q  = document.getElementById('q').value.toLowerCase();
-  const ft = document.getElementById('f-type').value;
-  const fu = document.getElementById('f-upd').value;
+  const q   = document.getElementById('q').value.toLowerCase();
+  const ft  = document.getElementById('f-type').value;
+  const fs  = document.getElementById('f-scope').value;
+  const fu  = document.getElementById('f-upd').value;
 
   let rows = results.filter(r => {
     if (ft && r.type !== ft) return false;
+    if (fs && r.scope !== fs) return false;
     if (fu === '1' && !r.update_available) return false;
     if (fu === '0' && (r.update_available || r.check_error)) return false;
     if (fu === 'err' && !r.check_error) return false;

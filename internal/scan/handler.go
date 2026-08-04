@@ -48,8 +48,10 @@ func (h *Handler) trigger(w http.ResponseWriter, r *http.Request) {
 // storeResults accepts results pushed by an external scanner (K8s CronJob mode).
 func (h *Handler) storeResults(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Results   []Result  `json:"results"`
-		ScannedAt time.Time `json:"scanned_at"`
+		Results         []Result  `json:"results"`
+		ScannedAt       time.Time `json:"scanned_at"`
+		Status          string    `json:"status"`
+		DurationSeconds float64   `json:"duration_seconds"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -58,7 +60,8 @@ func (h *Handler) storeResults(w http.ResponseWriter, r *http.Request) {
 	if req.ScannedAt.IsZero() {
 		req.ScannedAt = time.Now()
 	}
-	if err := h.svc.StoreResults(r.Context(), req.Results, req.ScannedAt); err != nil {
+	elapsed := time.Duration(req.DurationSeconds * float64(time.Second))
+	if err := h.svc.StoreResults(r.Context(), req.Results, req.ScannedAt, req.Status, elapsed); err != nil {
 		slog.Error("store results failed", "error", err)
 		http.Error(w, "failed to store results", http.StatusInternalServerError)
 		return

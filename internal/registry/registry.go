@@ -61,54 +61,65 @@ var httpClient = &http.Client{Timeout: 30 * time.Second}
 // cached is a memoized fetch outcome; errors are stored too so a broken
 // registry is not re-fetched for every dependency that references it.
 type cached[V any] struct {
+	at  time.Time
 	val V
 	err error
 }
 
 // IndexCache stores fetched registry data (parsed Helm indexes and OCI tag
-// lists) for the duration of a scan.
+// lists). Used per-scan, or shared across scans in serve mode where a TTL
+// bounds how long entries are reused.
 type IndexCache struct {
 	mu      sync.RWMutex
 	indexes map[string]cached[*helmIndex]
 	tags    map[string]cached[[]string]
+	ttl     time.Duration
 
 	sf       singleflight.Group
 	fetchSem chan struct{}
 }
 
-// NewIndexCache creates an empty IndexCache for reuse within a single scan.
-func NewIndexCache() *IndexCache {
+// NewIndexCache creates an empty IndexCache. ttl bounds how long fetched
+// entries are reused; ttl <= 0 keeps them valid for the cache's lifetime.
+func NewIndexCache(ttl time.Duration) *IndexCache {
 	return &IndexCache{
 		indexes:  make(map[string]cached[*helmIndex]),
 		tags:     make(map[string]cached[[]string]),
+		ttl:      ttl,
 		fetchSem: make(chan struct{}, maxConcurrentIndexFetches),
 	}
+}
+
+// fresh returns the memoized outcome for key if present and not expired.
+func fresh[V any](c *IndexCache, store map[string]cached[V], key string) (val V, ok bool, err error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	entry, exists := store[key]
+	if !exists || (c.ttl > 0 && time.Since(entry.at) >= c.ttl) {
+		return
+	}
+	return entry.val, true, entry.err
 }
 
 // getOrDo returns the memoized outcome for key, collapsing concurrent misses
 // for the same key into a single fetch (singleflight); without it every worker
 // referencing the same repo fetches and decodes its own copy simultaneously.
 func getOrDo[V any](ctx context.Context, c *IndexCache, store map[string]cached[V], key string, fetch func(context.Context) (V, error)) (V, error) {
-	c.mu.RLock()
-	entry, ok := store[key]
-	c.mu.RUnlock()
-	if ok {
-		return entry.val, entry.err
+	if val, ok, err := fresh(c, store, key); ok {
+		return val, err
 	}
 
 	v, err, _ := c.sf.Do(key, func() (any, error) {
-		c.mu.RLock()
-		entry, ok := store[key]
-		c.mu.RUnlock()
-		if ok {
-			return entry.val, entry.err
+		// Re-check: an entry may have been filled while we waited for the key.
+		if val, ok, ferr := fresh(c, store, key); ok {
+			return val, ferr
 		}
 
 		val, ferr := fetch(ctx)
 		// Don't memoize cancellation: it says nothing about the registry.
 		if !errors.Is(ferr, context.Canceled) && !errors.Is(ferr, context.DeadlineExceeded) {
 			c.mu.Lock()
-			store[key] = cached[V]{val: val, err: ferr}
+			store[key] = cached[V]{at: time.Now(), val: val, err: ferr}
 			c.mu.Unlock()
 		}
 		return val, ferr

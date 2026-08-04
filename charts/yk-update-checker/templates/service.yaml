@@ -4,6 +4,9 @@ metadata:
   name: {{ include "yk-update-checker.fullname" . }}
   labels:
     {{- include "yk-update-checker.labels" . | nindent 4 }}
+    # ServiceMonitor spec.selector matches against Service metadata.labels (not
+    # spec.selector), so we need this label here in addition to spec.selector.
+    app.kubernetes.io/component: dashboard
 spec:
   type: {{ .Values.service.type }}
   ports:
