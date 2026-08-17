@@ -64,6 +64,7 @@ extraEnv: []
 # ── Scanner CronJob ───────────────────────────────────────────────────────────
 scanner:
   # CronJob schedule (standard 5-field cron expression). Default: daily at 00:00.
+  # Evaluated in the pod's timezone; the chart sets no TZ, so this is UTC.
   schedule: "0 0 * * *"
   # Suspend the CronJob without deleting it.
   suspend: false

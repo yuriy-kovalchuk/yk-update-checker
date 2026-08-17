@@ -18,7 +18,8 @@ Single binary (`update-checker`) with two subcommands:
 - `cmd/update-checker/` — entrypoint; wires config, runner, service, trigger, scheduler, server
 - `internal/scan/` — vertical slice: `Handler` (HTTP), `Service` (orchestration), `Repository` (in-memory), `Runner` (clone + extract + version check), `Result`/`Status` types
 - `internal/extractor/` — `Extractor` interface + `HelmChart` (parses `Chart.yaml` deps) + `FluxCD` (two-pass: collect HelmRepository/OCIRepository, resolve HelmRelease)
-- `internal/registry/` — version resolution: HTTPS index.yaml fetch or OCI tag listing; scope filtering (patch/minor/major/all)
+- `internal/registry/` — version resolution: HTTPS index.yaml fetch or OCI tag listing; scope filtering (patch/minor/major/all); `IndexCache` with TTL (serve reuses one cache process-wide, scan uses per-run cache)
+- `internal/metrics/` — Prometheus collector + exporter; `/metrics` mounted automatically only when running in-cluster
 - `internal/trigger/` — `Trigger` interface with two impls: `KubernetesTrigger` (creates K8s Job from CronJob template) and `InlineTrigger` (calls `RunScan` in-process)
 - `internal/scheduler/` — interval-based internal scheduler; runs `RunScan` on a ticker
 - `internal/dashboard/` — serves embedded web UI
@@ -27,14 +28,15 @@ Single binary (`update-checker`) with two subcommands:
 - `internal/middleware/` — shared HTTP middleware (recovery, logging, headers)
 - `internal/version/` — `Version`, `Commit`, `BuildDate` vars injected via ldflags
 
-**Storage:** in-memory only (`scan.Repository` uses a `sync.RWMutex`-guarded slice). Results are lost on restart.
+**Storage:** in-memory only (`scan.Repository` uses a `sync.RWMutex`-guarded slice). Results are lost on restart. Registry fetch results are additionally cached with a TTL (`registry_cache_ttl` config key, default 15m, `0` = per-scan).
 
 **Data flow (serve mode):**
 
 1. On startup: optionally start internal scheduler (ticker → `RunScan`)
 2. On manual trigger: `POST /api/scan/trigger` → `Service.Trigger()` → K8s Job or inline `RunScan`
 3. External scanner (K8s CronJob): `POST /api/scan/results` → `Service.StoreResults()`
-4. Dashboard: `GET /api/scan/results` + `GET /api/scan/status` to render UI
+4. Dashboard: `GET /api/scan/results` + `GET /api/scan/status` to render UI (routes also include `GET /` and `GET /favicon.svg`)
+5. Metrics: every scan outcome (success/failure) is recorded via `internal/metrics`; partial repo failures still count as success
 
 ## Design Decisions
 
@@ -42,6 +44,8 @@ Single binary (`update-checker`) with two subcommands:
 - **Trigger abstraction** — `KubernetesTrigger` is preferred when a CronJob name is supplied and in-cluster config is available; falls back to `InlineTrigger` automatically. This lets the same binary work both inside and outside Kubernetes.
 - **In-memory storage** — no database dependency. Results survive as long as the pod is running. Acceptable given the use case (periodic scans, no history required).
 - **Extractor two-pass for FluxCD** — FluxCD files must be walked twice: first pass collects repository sources, second resolves HelmRelease chart refs. This is encoded in the `Extractor` interface (`PrepareFile` + `Extract`).
+- **In-cluster-gated metrics** — `/metrics` is mounted only when `rest.InClusterConfig` succeeds, so local runs stay lightweight. Chart CRDs (`ServiceMonitor`, `PrometheusRule`) are opt-in; the stale-scan rule's threshold must stay larger than the scan interval.
+- **Chart defaults** — CronJob scans daily at 00:00 UTC (no `TZ` set on the pod); both Deployment (serve) and CronJob (scan) mount the same `scanner.config` ConfigMap.
 
 ## Development Commands
 
@@ -68,5 +72,5 @@ make install-hooks # configure .githooks/
 - Constructor injection everywhere; exported interfaces, unexported impls
 - `context.Context` first param on all I/O functions
 - `log/slog` with `slog.NewTextHandler(os.Stderr, ...)`, structured fields only
-- Config via YAML file + flags; env vars for credential paths only
+- Config via YAML file + flags; env vars for credential paths only; `registry_cache_ttl` is validated only in serve mode (scan mode always uses a per-run cache)
 - `CGO_ENABLED=0` always; distroless nonroot runtime image
