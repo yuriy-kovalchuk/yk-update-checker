@@ -23,6 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Dashboard**: error banner in the WebUI showing the last scan error (`status.last_error`) — a failed or partially failed scan no longer looks identical to "all up to date"
 
 ### Fixed
+- **Security**: credential-file read errors are no longer logged in clear text (resolves CodeQL `go/clear-text-logging`); the file path is still logged for diagnostics
 - **Lint**: `internal/metrics` package now passes golangci-lint (errcheck, noctx, goimports)
 
 ## [0.2.2] - 2026-08-04

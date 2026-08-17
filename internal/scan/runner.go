@@ -341,7 +341,11 @@ func appendAuthHeader(env []string, user, pass string) []string {
 func readCredFile(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		slog.Warn("credential file unreadable", "path", path, "error", err)
+		// Log the path but not err: CodeQL (go/clear-text-logging) treats the
+		// error of a credential-file read as sensitive data. The path is a
+		// non-secret mount location, and the resulting auth failure still
+		// surfaces in the scan result's CheckError.
+		slog.Warn("credential file unreadable", "path", path)
 		return ""
 	}
 	return strings.TrimSpace(string(data))
