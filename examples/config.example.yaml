@@ -17,6 +17,12 @@ parallel_checks: 5
 # Mount a PVC at this path and set scanner.gitCacheDir in values.yaml.
 # git_cache_dir: /cache/git
 
+# Optional: how long fetched registry data (Helm indexes, OCI tag lists)
+# is reused between scans by the serve process. Scans that start within this
+# window of a previous one skip re-downloading indexes that were fetched
+# recently. "0" forces a fresh fetch on every scan. Default: 15m.
+# registry_cache_ttl: 15m
+
 repos:
   # Public repository — no auth required
   - name: homelab

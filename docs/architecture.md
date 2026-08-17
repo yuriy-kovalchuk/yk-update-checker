@@ -21,6 +21,7 @@ yk-update-checker is a single binary with two subcommands deployed via a single 
                   │  POST /api/scan/trigger   (manual scan) │
                   │  POST /api/scan/results   (push results)│
                   │  GET /health  GET /ready                │
+                  │  GET /metrics (in-cluster only)         │
                   │                                         │
                   │  ┌─────────┐   in-memory Repository     │
                   │  │ Service │◄──(sync.RWMutex slice)     │
@@ -61,6 +62,22 @@ The trigger implementation is selected at startup: `KubernetesTrigger` if `--cro
 
 Results are held in memory (`scan.Repository`, a `sync.RWMutex`-guarded slice). There is no database. Results are lost on pod restart; the next scheduled or manual scan repopulates them.
 
+Fetched registry data (Helm `index.yaml` files, OCI tag lists) is cached in a `registry.IndexCache`. Every scan deduplicates lookups per unique registry URL (singleflight + memoized errors), and in `serve` mode the cache outlives individual scans: entries are reused until `registry_cache_ttl` expires (default `15m`, `0` = per-scan cache), so back-to-back scans (manual trigger right after a scheduled run, CronJob retries) skip the index re-download. One-shot `scan` runs always use a per-run cache.
+
+## Monitoring & alerting
+
+When running in Kubernetes, the `serve` binary mounts a Prometheus `/metrics` endpoint automatically (detected via `rest.InClusterConfig`; no flag or chart value needed). Outside a cluster it is not mounted.
+
+Key metrics:
+
+- `update_checker_dependency_outdated_info` — one time series per outdated dependency, labelled by source, chart, dependency, type, protocol, scope, and current/latest versions. This drives the alert rules.
+- `update_checker_last_scan_time`, `update_checker_scan_duration_seconds`, `update_checker_scan_total` — operational. `last_scan_time` advances only on successful scans, which is what the staleness alert relies on.
+
+The chart ships two opt-in CRDs (both disabled by default):
+
+- `metrics.serviceMonitor.enabled` — `ServiceMonitor` for Prometheus Operator discovery.
+- `metrics.prometheusRule.enabled` — `PrometheusRule` with one `OutdatedDependency<Scope>` rule per configured scope (default: major=warning, minor/patch=info, unknown=warning) plus `UpdateCheckerScanStale` (`metrics.prometheusRule.staleScan`, default threshold 30h). Keep the stale threshold comfortably larger than the scan interval in `scanner.schedule` (default schedule: daily at 00:00 UTC).
+
 ## Package layout
 
 ```
@@ -75,7 +92,8 @@ internal/
     types.go            Result, Status
   dashboard/            GET /, GET /api/results, GET /api/status; embeds ui/index.html
   extractor/            Extractor interface + HelmChart + FluxCD implementations
-  registry/             version resolution: HTTPS index.yaml or OCI tag listing; scope filter
+  registry/             version resolution: HTTPS index.yaml or OCI tag listing; scope filter; TTL cache
+  metrics/              Prometheus collector + exporter (mounted at /metrics, in-cluster only)
   trigger/              Trigger interface; KubernetesTrigger + InlineTrigger
   scheduler/            interval ticker; fires RunScan immediately then on each tick
   config/               YAML config loader

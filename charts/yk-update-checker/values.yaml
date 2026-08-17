@@ -63,8 +63,9 @@ extraEnv: []
 
 # ── Scanner CronJob ───────────────────────────────────────────────────────────
 scanner:
-  # CronJob schedule (standard 5-field cron expression).
-  schedule: "0 */6 * * *"
+  # CronJob schedule (standard 5-field cron expression). Default: daily at 00:00.
+  # Evaluated in the pod's timezone; the chart sets no TZ, so this is UTC.
+  schedule: "0 0 * * *"
   # Suspend the CronJob without deleting it.
   suspend: false
 
@@ -73,6 +74,7 @@ scanner:
     update_type: all          # all | major | minor | patch
     parallel_checks: 5
     git_cache_dir: /tmp/git-cache
+    registry_cache_ttl: 15m   # serve only: reuse fetched registry data between scans ("0" = per-scan)
     repos: []
     # - name: my-gitops
     #   repo: https://github.com/example/my-gitops-repo
@@ -118,3 +120,54 @@ serviceAccount:
   create: true
   name: ""
   annotations: {}
+
+# ── Prometheus / Alertmanager integration ──────────────────────────────────────
+grafana:
+  # Creates a ConfigMap with the pre-built Grafana dashboard JSON.
+  # When enabled, the label `grafana_dashboard: "1"` is added so that
+  # Grafana (or grafana-operator) auto-discovers and imports it.
+  dashboard:
+    enabled: false
+    # Sets the k8s-sidecar-target-directory annotation, which the Grafana
+    # sidecar uses to file the dashboard under this folder. Assumes the
+    # sidecar's watched base directory is its default, "/tmp/dashboards"
+    # (sidecarBaseDir below) — override if your Grafana release configured
+    # sidecar.dashboards.folder to something else.
+    folder: "Security"
+    sidecarBaseDir: "/tmp/dashboards"
+    additionalLabels: {}
+
+metrics:
+  # ServiceMonitor CRD — requires Prometheus Operator.
+  serviceMonitor:
+    enabled: false
+    additionalLabels: {}
+    interval: "1m"
+
+  # PrometheusRule CRD — generates alert rules routed to Alertmanager.
+  prometheusRule:
+    enabled: false
+    # Each entry becomes one rule.  Scope is matched against the metric label;
+    # severity is emitted as a label for Alertmanager routing.
+    # "unknown" covers non-semver-pinned dependencies (e.g. git SHAs) whose
+    # bump size can't be classified — treated as warning since it could be
+    # anything up to a major change.
+    rules:
+      - scope: major
+        severity: warning
+      - scope: minor
+        severity: info
+      - scope: patch
+        severity: info
+      - scope: unknown
+        severity: warning
+
+    # Scan-staleness rule — fires when the last successful scan is older than
+    # thresholdSeconds. Catches a down or persistently failing scanner.
+    # Partially failed scans (some repos failed) still count as successful.
+    # Not evaluated before the first successful scan (no metric series yet).
+    # Keep thresholdSeconds comfortably larger than the scan interval in
+    # scanner.schedule (default: daily → 30h).
+    staleScan:
+      enabled: true
+      thresholdSeconds: 108000

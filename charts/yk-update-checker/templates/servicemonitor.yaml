@@ -1,0 +1,20 @@
+{{- if .Values.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "yk-update-checker.fullname" . }}
+  labels:
+    {{- include "yk-update-checker.labels" . | nindent 4 }}
+    {{- with .Values.metrics.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
+  selector:
+    matchLabels:
+      {{- include "yk-update-checker.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: dashboard
+{{- end }}

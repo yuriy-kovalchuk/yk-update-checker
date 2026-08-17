@@ -2,10 +2,13 @@ package scan
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/yuriy-kovalchuk/yk-update-checker/internal/config"
@@ -17,7 +20,7 @@ func newTestRunner(repos []config.Repo) *Runner {
 	newExtractors := func() []extractor.Extractor {
 		return []extractor.Extractor{extractor.NewHelmChart()}
 	}
-	return NewRunner(repos, newExtractors, registry.ScopeAll, 2, "")
+	return NewRunner(repos, newExtractors, registry.ScopeAll, 2, "", registry.NewIndexCache(0))
 }
 
 // initGitRepo creates a local git repository with the given files committed.
@@ -89,6 +92,41 @@ func TestRunPartialFailureReturnsRepoErrs(t *testing.T) {
 	}
 }
 
+// TestRunReusesSharedCacheBetweenRuns verifies that a cache shared between
+// Runs (as serve mode does) avoids re-fetching registry indexes.
+func TestRunReusesSharedCacheBetweenRuns(t *testing.T) {
+	var indexCalls atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		indexCalls.Add(1)
+		_, _ = w.Write([]byte("entries:\n  podinfo:\n  - version: 6.0.0\n"))
+	}))
+	defer ts.Close()
+
+	chart := "name: sample\nversion: 1.0.0\ndependencies:\n" +
+		"- name: podinfo\n  version: 5.0.0\n  repository: " + ts.URL + "\n"
+	good := initGitRepo(t, map[string]string{"Chart.yaml": chart})
+	repos := []config.Repo{{Name: "good", URL: good}}
+
+	newExtractors := func() []extractor.Extractor {
+		return []extractor.Extractor{extractor.NewHelmChart()}
+	}
+	runner := NewRunner(repos, newExtractors, registry.ScopeAll, 2, "", registry.NewIndexCache(0))
+
+	for _, run := range []string{"first", "second"} {
+		results, _, err := runner.Run(context.Background())
+		if err != nil {
+			t.Fatalf("Run (%s): %v", run, err)
+		}
+		if len(results) != 1 {
+			t.Fatalf("Run (%s): got %d results, want 1", run, len(results))
+		}
+	}
+
+	if got := indexCalls.Load(); got != 1 {
+		t.Errorf("index fetched %d times across 2 runs with a shared cache, want 1", got)
+	}
+}
+
 func TestAuthEnvTokenUsesHeaderNotURL(t *testing.T) {
 	repo := config.Repo{Auth: config.RepoAuth{Type: "token", Token: "s3cret"}}
 	env := authEnv(repo)
@@ -133,5 +171,53 @@ func TestRunCancelledReturnsError(t *testing.T) {
 	}
 	if results != nil {
 		t.Errorf("results = %v, want nil for interrupted scan", results)
+	}
+}
+
+func TestClassifyScope(t *testing.T) {
+	tests := []struct {
+		current, latest, want string
+	}{
+		{"1.0.0", "2.0.0", "major"},
+		{"3.5.1", "4.0.0", "major"},
+		{"1.0.0", "1.1.0", "minor"},
+		{"1.2.3", "1.99.0", "minor"},
+		{"1.0.0", "1.0.1", "patch"},
+		{"1.0.0", "1.0.42", "patch"},
+		{"1.0.0", "1.0.0", ""},        // same version → no bump
+		{"1.0.0", "", ""},             // no latest
+		{"abc", "def", "unknown"},     // non-semver, different strings
+		{"v1.2.3", "v1.2.4", "patch"}, // v-prefixed semver
+		{"0.1.0", "0.2.0", "minor"},   // major=0 minor change
+		{"0.1.0", "0.1.1", "patch"},   // major=0 patch change
+	}
+
+	for _, tt := range tests {
+		got := classifyScope(tt.current, tt.latest)
+		if got != tt.want {
+			t.Errorf("classifyScope(%q, %q) = %q, want %q", tt.current, tt.latest, got, tt.want)
+		}
+	}
+}
+
+func TestIsNewer(t *testing.T) {
+	tests := []struct {
+		latest, current string
+		want            bool
+	}{
+		{"2.0.0", "1.0.0", true},
+		{"1.0.1", "1.0.0", true},
+		{"1.0.0", "1.0.0", false},
+		{"1.0.0", "2.0.0", false},
+		{"", "1.0.0", false},  // empty latest → never newer
+		{"abc", "def", true},  // non-semver, different strings
+		{"abc", "abc", false}, // non-semver, same string
+	}
+
+	for _, tt := range tests {
+		got := isNewer(tt.latest, tt.current)
+		if got != tt.want {
+			t.Errorf("isNewer(%q, %q) = %v, want %v", tt.latest, tt.current, got, tt.want)
+		}
 	}
 }

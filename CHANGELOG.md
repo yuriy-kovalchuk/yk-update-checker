@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-17
+
+### Added
+- **Registry**: TTL cache for fetched registry data (`registry_cache_ttl`, default 15m) — `serve` reuses recently fetched Helm indexes and OCI tag lists between scans, so back-to-back scans skip index re-downloads; `0` restores per-scan fetching
+- **Dashboard**: new app icon (update arrow + check, served at `/favicon.svg` and used in the app bar); replaces the inline layer-stack icon
+- **Helm**: fixed the broken chart `icon:` URL (pointed at the old `yk-helm-update-checker` repo and removed path)
+- **Metrics**: Prometheus `/metrics` endpoint exposed when running inside Kubernetes — auto-detected via `rest.InClusterConfig`
+- **Metrics**: `update_checker_dependency_outdated_info` gauge — one time series per outdated dependency, labelled by source, chart, dependency, type, protocol, scope, current_version, latest_version
+- **Metrics**: `update_checker_last_scan_time`, `update_checker_scan_duration_seconds`, `update_checker_scan_total` operational gauges
+- **Helm**: `ServiceMonitor` CRD template (opt-in via `metrics.serviceMonitor.enabled`) for Prometheus Operator discovery
+- **Helm**: `PrometheusRule` CRD template with configurable scope→severity rules (opt-in via `metrics.prometheusRule.enabled`), including a default rule for `unknown`-scope (non-semver-pinned) dependencies
+- **Dashboard**: pre-built Grafana dashboard JSON (`charts/yk-update-checker/dashboards/update-checker.json`) — stat row with total outdated count plus per-scope breakdown (major/minor/patch/unknown) and time since last scan, and a table of outdated dependencies with a scope filter (major/minor/patch/unknown)
+- **Dashboard**: WebUI now has a scope filter dropdown (major/minor/patch/unknown) alongside existing type and status filters
+- **Helm**: `UpdateCheckerScanStale` alert rule (opt-in via `metrics.prometheusRule.staleScan.enabled`, threshold via `staleScan.thresholdSeconds`, default 30h to match the daily scan schedule) — fires when no scan has completed successfully within the threshold, so a broken scanner can't silently clear all update alerts
+- **Dashboard**: error banner in the WebUI showing the last scan error (`status.last_error`) — a failed or partially failed scan no longer looks identical to "all up to date"
+
+### Fixed
+- **Security**: credential-file read errors are no longer logged in clear text (resolves CodeQL `go/clear-text-logging`); the file path is still logged for diagnostics
+- **Lint**: `internal/metrics` package now passes golangci-lint (errcheck, noctx, goimports)
+
 ## [0.2.2] - 2026-08-04
 
 ### Changed

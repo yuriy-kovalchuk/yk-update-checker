@@ -22,13 +22,17 @@ const (
 
 // Server is the HTTP server for the update-checker.
 type Server struct {
-	port string
+	port     string
+	handlers http.Handler // optional additional handler tree (e.g. /metrics)
 }
 
 // New creates an HTTP server listening on the given port.
 func New(port string) *Server {
 	return &Server{port: port}
 }
+
+// SetHandler sets an optional HTTP handler to be mounted alongside the default routes.
+func (s *Server) SetHandler(h http.Handler) { s.handlers = h }
 
 // Run starts the HTTP server and blocks until ctx is cancelled.
 func (s *Server) Run(ctx context.Context, svc scan.Service) error {
@@ -39,6 +43,10 @@ func (s *Server) Run(ctx context.Context, svc scan.Service) error {
 
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("GET /ready", health)
+
+	if s.handlers != nil {
+		mux.Handle("/metrics", s.handlers)
+	}
 
 	limitedMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)

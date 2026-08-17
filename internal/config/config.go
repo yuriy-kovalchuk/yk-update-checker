@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 	"unicode"
 
 	"gopkg.in/yaml.v3"
@@ -13,6 +14,11 @@ import (
 
 // DefaultParallelChecks is the default number of concurrent version checks.
 const DefaultParallelChecks = 5
+
+// DefaultRegistryCacheTTL bounds how long fetched registry data (Helm indexes,
+// OCI tag lists) is reused between scans in serve mode when
+// registry_cache_ttl is not set.
+const DefaultRegistryCacheTTL = 15 * time.Minute
 
 // RepoAuth holds credentials for a repository.
 type RepoAuth struct {
@@ -39,6 +45,10 @@ type Config struct {
 	UpdateType     string `yaml:"update_type"` // all | major | minor | patch
 	ParallelChecks int    `yaml:"parallel_checks"`
 	GitCacheDir    string `yaml:"git_cache_dir"`
+	// RegistryCacheTTL is a duration string (e.g. "15m") bounding how long
+	// fetched registry data is reused between scans in serve mode. "0" forces
+	// a fresh fetch on every scan; empty means DefaultRegistryCacheTTL.
+	RegistryCacheTTL string `yaml:"registry_cache_ttl"`
 }
 
 // SetupLogger configures the default slog handler.
@@ -83,6 +93,22 @@ func Load(path string) (*Config, error) {
 		cfg.ParallelChecks = DefaultParallelChecks
 	}
 	return &cfg, nil
+}
+
+// RegistryCacheDuration parses RegistryCacheTTL, defaulting to
+// DefaultRegistryCacheTTL when unset.
+func (c *Config) RegistryCacheDuration() (time.Duration, error) {
+	if c.RegistryCacheTTL == "" {
+		return DefaultRegistryCacheTTL, nil
+	}
+	d, err := time.ParseDuration(c.RegistryCacheTTL)
+	if err != nil {
+		return 0, fmt.Errorf("config: invalid registry_cache_ttl %q: %w", c.RegistryCacheTTL, err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("config: registry_cache_ttl must not be negative, got %s", d)
+	}
+	return d, nil
 }
 
 // SafeName maps a repo name to a filesystem-safe directory name.

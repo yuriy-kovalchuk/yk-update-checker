@@ -16,4 +16,4 @@ sources:
 maintainers:
   - name: yuriy kovalchuk
     email: yuriykovalchuk1992@icloud.com
-icon: https://raw.githubusercontent.com/yuriy-kovalchuk/yk-helm-update-checker/master/internal/web/ui/favicon.svg
+icon: https://raw.githubusercontent.com/yuriy-kovalchuk/yk-update-checker/master/internal/dashboard/ui/favicon.svg

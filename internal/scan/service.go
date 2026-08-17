@@ -16,7 +16,9 @@ type Service interface {
 	// RunScan executes a full scan in-process and stores the results.
 	RunScan(ctx context.Context) error
 	// StoreResults stores results pushed by an external scanner (K8s CronJob mode).
-	StoreResults(ctx context.Context, results []Result, scannedAt time.Time) error
+	// status and elapsed mirror what RunScan reports to the meter locally; status
+	// "failure" leaves previously stored results untouched.
+	StoreResults(ctx context.Context, results []Result, scannedAt time.Time, status string, elapsed time.Duration) error
 	// GetResults returns the latest scan results.
 	GetResults(ctx context.Context) ([]Result, error)
 	// GetStatus returns current scanning state.
@@ -25,12 +27,19 @@ type Service interface {
 	Trigger(ctx context.Context) error
 	// SetTrigger configures the trigger used by Trigger().
 	SetTrigger(t trigger.Trigger)
+	// SetMeter configures an optional metrics callback invoked after each RunScan.
+	SetMeter(m MetricsCallback)
 }
+
+// MetricsCallback is called after a scan completes with its elapsed duration.
+// The callback receives status="success" or "failure".  It is optional (nil = no-op).
+type MetricsCallback func(status string, elapsed time.Duration)
 
 type service struct {
 	runner *Runner
 	repo   Repository
 	trig   trigger.Trigger
+	meter  MetricsCallback
 
 	mu       sync.Mutex
 	scanning bool
@@ -48,7 +57,14 @@ func (s *service) SetTrigger(t trigger.Trigger) {
 	s.trig = t
 }
 
+// SetMeter configures a metrics callback that is invoked after every RunScan.
+func (s *service) SetMeter(m MetricsCallback) {
+	s.meter = m
+}
+
 func (s *service) RunScan(ctx context.Context) error {
+	start := time.Now()
+
 	s.mu.Lock()
 	if s.scanning {
 		s.mu.Unlock()
@@ -70,6 +86,9 @@ func (s *service) RunScan(ctx context.Context) error {
 		// Nothing was scanned (cancelled or all repos failed): keep the
 		// previous results instead of overwriting them with an empty set.
 		s.setLastError(err.Error())
+		if s.meter != nil {
+			s.meter("failure", time.Since(start))
+		}
 		return err
 	}
 
@@ -84,6 +103,9 @@ func (s *service) RunScan(ctx context.Context) error {
 		return err
 	}
 	slog.Info("scan completed", "results", len(results))
+	if s.meter != nil {
+		s.meter("success", time.Since(start))
+	}
 	return nil
 }
 
@@ -93,7 +115,18 @@ func (s *service) setLastError(msg string) {
 	s.mu.Unlock()
 }
 
-func (s *service) StoreResults(_ context.Context, results []Result, scannedAt time.Time) error {
+func (s *service) StoreResults(_ context.Context, results []Result, scannedAt time.Time, status string, elapsed time.Duration) error {
+	if status == "" {
+		status = "success"
+	}
+	if s.meter != nil {
+		s.meter(status, elapsed)
+	}
+	if status == "failure" {
+		// Mirrors RunScan: keep previously stored results instead of
+		// overwriting them with whatever the failed scanner Job sent.
+		return nil
+	}
 	return s.repo.Save(results, scannedAt)
 }
 

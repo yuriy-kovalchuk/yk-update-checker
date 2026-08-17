@@ -29,7 +29,7 @@ func TestGetOrFetchDeduplicatesConcurrentFetches(t *testing.T) {
 	defer func() { httpClient = oldClient }()
 
 	repoURL := strings.TrimPrefix(ts.URL, "https://")
-	cache := NewIndexCache()
+	cache := NewIndexCache(0)
 
 	var wg sync.WaitGroup
 	for range 10 {
@@ -60,12 +60,100 @@ func TestLatestOverPlainHTTP(t *testing.T) {
 	defer ts.Close()
 
 	repoURL := strings.TrimPrefix(ts.URL, "http://")
-	latest, err := Latest(context.Background(), NewIndexCache(), "http", repoURL, "app", "1.0.0", ScopeAll)
+	latest, err := Latest(context.Background(), NewIndexCache(0), "http", repoURL, "app", "1.0.0", ScopeAll)
 	if err != nil {
 		t.Fatalf("Latest over http: %v", err)
 	}
 	if latest != "2.0.0" {
 		t.Errorf("latest = %q, want 2.0.0", latest)
+	}
+}
+
+func TestCacheTTLExpiresEntries(t *testing.T) {
+	var calls atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		_, _ = w.Write([]byte("entries:\n  app:\n  - version: 1.2.3\n"))
+	}))
+	defer ts.Close()
+
+	repoURL := strings.TrimPrefix(ts.URL, "http://")
+	cache := NewIndexCache(40 * time.Millisecond)
+
+	latest, err := Latest(context.Background(), cache, "http", repoURL, "app", "1.0.0", ScopeAll)
+	if err != nil {
+		t.Fatalf("Latest: %v", err)
+	}
+	if latest != "1.2.3" {
+		t.Errorf("latest = %q, want 1.2.3", latest)
+	}
+
+	// Within the TTL: served from cache, no new fetch.
+	if _, err := Latest(context.Background(), cache, "http", repoURL, "app", "1.0.0", ScopeAll); err != nil {
+		t.Fatalf("Latest (cached): %v", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("index fetched %d times within TTL, want 1", got)
+	}
+
+	// Past the TTL: re-fetched.
+	time.Sleep(60 * time.Millisecond)
+	if _, err := Latest(context.Background(), cache, "http", repoURL, "app", "1.0.0", ScopeAll); err != nil {
+		t.Fatalf("Latest (expired): %v", err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Errorf("index fetched %d times after TTL expiry, want 2", got)
+	}
+}
+
+func TestCacheTTLZeroNeverExpires(t *testing.T) {
+	var calls atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		_, _ = w.Write([]byte("entries:\n  app:\n  - version: 1.2.3\n"))
+	}))
+	defer ts.Close()
+
+	repoURL := strings.TrimPrefix(ts.URL, "http://")
+	cache := NewIndexCache(0)
+
+	for range 2 {
+		time.Sleep(10 * time.Millisecond)
+		if _, err := Latest(context.Background(), cache, "http", repoURL, "app", "1.0.0", ScopeAll); err != nil {
+			t.Fatalf("Latest: %v", err)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("index fetched %d times with TTL 0, want 1 (entries never expire)", got)
+	}
+}
+
+func TestExpiredErrorIsRefetched(t *testing.T) {
+	// A registry that fails once and then recovers: the negative cache entry
+	// must expire too, so a later scan succeeds.
+	var calls atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte("entries:\n  app:\n  - version: 1.2.3\n"))
+	}))
+	defer ts.Close()
+
+	repoURL := strings.TrimPrefix(ts.URL, "http://")
+	cache := NewIndexCache(20 * time.Millisecond)
+
+	if _, err := Latest(context.Background(), cache, "http", repoURL, "app", "1.0.0", ScopeAll); err == nil {
+		t.Fatal("Latest: want error from failing registry, got nil")
+	}
+	time.Sleep(30 * time.Millisecond)
+	latest, err := Latest(context.Background(), cache, "http", repoURL, "app", "1.0.0", ScopeAll)
+	if err != nil {
+		t.Fatalf("Latest after recovery: %v", err)
+	}
+	if latest != "1.2.3" {
+		t.Errorf("latest = %q, want 1.2.3", latest)
 	}
 }
 
@@ -78,7 +166,7 @@ func TestFailedFetchIsNotRetriedWithinScan(t *testing.T) {
 	defer ts.Close()
 
 	repoURL := strings.TrimPrefix(ts.URL, "http://")
-	cache := NewIndexCache()
+	cache := NewIndexCache(0)
 	for range 3 {
 		if _, err := Latest(context.Background(), cache, "http", repoURL, "app", "1.0.0", ScopeAll); err == nil {
 			t.Fatal("Latest: want error from failing registry, got nil")
@@ -103,7 +191,7 @@ func TestIndexSizeLimit(t *testing.T) {
 	defer ts.Close()
 
 	repoURL := strings.TrimPrefix(ts.URL, "http://")
-	_, err := Latest(context.Background(), NewIndexCache(), "http", repoURL, "app", "1.0.0", ScopeAll)
+	_, err := Latest(context.Background(), NewIndexCache(0), "http", repoURL, "app", "1.0.0", ScopeAll)
 	if err == nil || !strings.Contains(err.Error(), "size limit") {
 		t.Errorf("err = %v, want size limit error", err)
 	}
@@ -131,7 +219,7 @@ func TestOCITagsAreCached(t *testing.T) {
 
 	// go-containerregistry uses plain http for localhost registries.
 	host := "localhost:" + strings.Split(ts.Listener.Addr().String(), ":")[1]
-	cache := NewIndexCache()
+	cache := NewIndexCache(0)
 	for range 3 {
 		latest, err := Latest(context.Background(), cache, "oci", host+"/charts", "app", "1.0.0", ScopeAll)
 		if err != nil {
@@ -191,7 +279,7 @@ func TestLatestWithRangeVersion(t *testing.T) {
 	repoURL := strings.TrimPrefix(ts.URL, "http://")
 
 	// Scope all: deployed is 29.5.0 (newest matching 29.x), so 30.0.0 is an update.
-	latest, err := Latest(context.Background(), NewIndexCache(), "http", repoURL, "prometheus-operator-crds", "29.x", ScopeAll)
+	latest, err := Latest(context.Background(), NewIndexCache(0), "http", repoURL, "prometheus-operator-crds", "29.x", ScopeAll)
 	if err != nil {
 		t.Fatalf("Latest(29.x, all): %v", err)
 	}
@@ -200,7 +288,7 @@ func TestLatestWithRangeVersion(t *testing.T) {
 	}
 
 	// Scope minor: nothing newer within major 29 — up to date.
-	latest, err = Latest(context.Background(), NewIndexCache(), "http", repoURL, "prometheus-operator-crds", "29.x", ScopeMinor)
+	latest, err = Latest(context.Background(), NewIndexCache(0), "http", repoURL, "prometheus-operator-crds", "29.x", ScopeMinor)
 	if err != nil {
 		t.Fatalf("Latest(29.x, minor): %v", err)
 	}

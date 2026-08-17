@@ -26,6 +26,7 @@ func NewHandler(svc scan.Service) *Handler {
 // RegisterRoutes wires dashboard endpoints onto the mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /{$}", h.ui)
+	mux.HandleFunc("GET /favicon.svg", h.favicon)
 	mux.HandleFunc("GET /api/results", h.results)
 	mux.HandleFunc("GET /api/status", h.status)
 }
@@ -39,6 +40,18 @@ func (h *Handler) ui(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if _, err := w.Write(data); err != nil {
 		slog.Error("serve UI write failed", "error", err)
+	}
+}
+
+func (h *Handler) favicon(w http.ResponseWriter, _ *http.Request) {
+	data, err := uiFS.ReadFile("ui/favicon.svg")
+	if err != nil {
+		http.Error(w, "favicon not found", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "image/svg+xml")
+	if _, err := w.Write(data); err != nil {
+		slog.Error("serve favicon write failed", "error", err)
 	}
 }
 

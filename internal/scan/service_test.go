@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,6 +63,120 @@ func TestGetStatusReportsTriggerRunning(t *testing.T) {
 	}
 	if !st.TriggerAvailable {
 		t.Error("Status.TriggerAvailable = false, want true")
+	}
+}
+
+func TestStoreResultsRecordsMeterAndSaves(t *testing.T) {
+	repo := NewRepository()
+	svc := NewService(nil, repo)
+
+	var gotStatus string
+	var gotElapsed time.Duration
+	svc.SetMeter(func(status string, elapsed time.Duration) {
+		gotStatus = status
+		gotElapsed = elapsed
+	})
+
+	results := []Result{{Source: "s", Dependency: "d", CurrentVersion: "1.0.0"}}
+	if err := svc.StoreResults(context.Background(), results, time.Now(), "success", 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	if gotStatus != "success" {
+		t.Errorf("meter status = %q, want %q", gotStatus, "success")
+	}
+	if gotElapsed != 2*time.Second {
+		t.Errorf("meter elapsed = %v, want %v", gotElapsed, 2*time.Second)
+	}
+
+	stored, _, err := repo.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 1 || stored[0].Source != "s" {
+		t.Errorf("stored results = %v, want results saved", stored)
+	}
+}
+
+func TestStoreResultsFailureKeepsPreviousResults(t *testing.T) {
+	repo := NewRepository()
+	previous := []Result{{Source: "old", Dependency: "dep", CurrentVersion: "1.0.0"}}
+	if err := repo.Save(previous, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(nil, repo)
+
+	var gotStatus string
+	svc.SetMeter(func(status string, _ time.Duration) { gotStatus = status })
+
+	if err := svc.StoreResults(context.Background(), nil, time.Now(), "failure", time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	if gotStatus != "failure" {
+		t.Errorf("meter status = %q, want %q", gotStatus, "failure")
+	}
+
+	stored, _, err := repo.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 1 || stored[0].Source != "old" {
+		t.Errorf("stored results = %v, want previous results preserved on failure", stored)
+	}
+}
+
+func TestStoreResultsDefaultsEmptyStatusToSuccess(t *testing.T) {
+	repo := NewRepository()
+	svc := NewService(nil, repo)
+
+	var gotStatus string
+	svc.SetMeter(func(status string, _ time.Duration) { gotStatus = status })
+
+	results := []Result{{Source: "s", Dependency: "d", CurrentVersion: "1.0.0"}}
+	if err := svc.StoreResults(context.Background(), results, time.Now(), "", 0); err != nil {
+		t.Fatal(err)
+	}
+
+	if gotStatus != "success" {
+		t.Errorf("meter status = %q, want %q (empty status defaults to success)", gotStatus, "success")
+	}
+	stored, _, err := repo.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 1 {
+		t.Errorf("stored results = %v, want results saved on default status", stored)
+	}
+}
+
+func TestStoreResultsHandlerForwardsStatusAndDuration(t *testing.T) {
+	repo := NewRepository()
+	svc := NewService(nil, repo)
+
+	var gotStatus string
+	var gotElapsed time.Duration
+	svc.SetMeter(func(status string, elapsed time.Duration) {
+		gotStatus = status
+		gotElapsed = elapsed
+	})
+
+	mux := http.NewServeMux()
+	NewHandler(svc).RegisterRoutes(mux)
+
+	body := `{"results":[{"source":"s","dependency":"d","current_version":"1.0.0"}],"status":"success","duration_seconds":3.5}`
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/scan/results", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	if gotStatus != "success" {
+		t.Errorf("meter status = %q, want %q", gotStatus, "success")
+	}
+	if gotElapsed != 3500*time.Millisecond {
+		t.Errorf("meter elapsed = %v, want %v", gotElapsed, 3500*time.Millisecond)
 	}
 }
 
