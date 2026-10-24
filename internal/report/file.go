@@ -24,7 +24,7 @@ func (f Files) ListRepositoryScans(_ context.Context) ([]RepositoryScan, error) 
 
 // PutRepositoryScan implements Backend.
 func (f Files) PutRepositoryScan(_ context.Context, rs *RepositoryScan) error {
-	return writeFile(f.path("repositoryscans", rs.Meta.Name), rs)
+	return writeFile(f.path("repositoryscans", rs.Name), rs)
 }
 
 // ListDependencies implements Backend.
@@ -32,7 +32,7 @@ func (f Files) ListDependencies(_ context.Context, repoID string) ([]Dependency,
 	all, err := readAll[Dependency](filepath.Join(f.Dir, "dependencies"))
 	out := all[:0]
 	for _, d := range all {
-		if repoID == "" || d.Meta.Labels[LabelRepoID] == repoID {
+		if repoID == "" || d.Labels[LabelRepoID] == repoID {
 			out = append(out, d)
 		}
 	}
@@ -41,7 +41,7 @@ func (f Files) ListDependencies(_ context.Context, repoID string) ([]Dependency,
 
 // PutDependency implements Backend.
 func (f Files) PutDependency(_ context.Context, d *Dependency) error {
-	return writeFile(f.path("dependencies", d.Meta.Name), d)
+	return writeFile(f.path("dependencies", d.Name), d)
 }
 
 // DeleteRepositoryScan implements Backend.

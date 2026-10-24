@@ -1,4 +1,4 @@
-{{- /* The scan writes its reports as custom resources, so it does use the API — as the scanner ServiceAccount, which can only touch the two report kinds. */ -}}
+{{- /* The scan writes its reports as custom resources, so it does use the API — as the scanner ServiceAccount, which can only touch the two report kinds and the scan Lease. */ -}}
 {{- $creds := mustFromJson (include "yk-update-checker.repoCreds" .) -}}
 {{- $registry := mustFromJson (include "yk-update-checker.registryAuth" .) -}}
 {{- include "yk-update-checker.requireCredFsGroup" (dict "creds" (or $creds $registry) "fsGroup" .Values.scanner.podSecurityContext.fsGroup "who" "scanner.podSecurityContext (scan CronJob)") -}}

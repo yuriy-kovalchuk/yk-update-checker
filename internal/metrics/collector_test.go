@@ -1,8 +1,9 @@
 package metrics
 
 import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"testing"
-	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -14,11 +15,11 @@ import (
 // testRepo is a stored scan for tests: its results and when it ran.
 type testRepo struct {
 	results   []scan.Result
-	scannedAt time.Time
+	scannedAt metav1.Time
 }
 
 // Save replaces the stored scan, as a rescan would.
-func (r *testRepo) Save(results []scan.Result, at time.Time) error {
+func (r *testRepo) Save(results []scan.Result, at metav1.Time) error {
 	r.results, r.scannedAt = results, at
 	return nil
 }
@@ -50,7 +51,7 @@ func TestResultCollector_NoResults(t *testing.T) {
 }
 
 func TestResultCollector_FiltersUpdateAvailableFalse(t *testing.T) {
-	now := time.Now()
+	now := metav1.Now()
 	repo := &testRepo{
 		results: []scan.Result{
 			{Source: "repo-1", Chart: "chart-a", Dependency: "dep-x", Type: "helm", Protocol: "https", Scope: "patch", CurrentVersion: "1.0.0", LatestVersion: "1.0.1", UpdateAvailable: false, CheckedAt: now},
@@ -69,7 +70,7 @@ func TestResultCollector_FiltersUpdateAvailableFalse(t *testing.T) {
 }
 
 func TestResultCollector_EmitsOutdatedOnly(t *testing.T) {
-	now := time.Now()
+	now := metav1.Now()
 	repo := &testRepo{
 		results: []scan.Result{
 			{Source: "gitops", Chart: "nginx-ingress", Dependency: "ingress-nginx", Type: "helm", Protocol: "https", Scope: "major", CurrentVersion: "4.0.0", LatestVersion: "5.0.0", UpdateAvailable: true, CheckedAt: now},
@@ -89,7 +90,7 @@ func TestResultCollector_EmitsOutdatedOnly(t *testing.T) {
 }
 
 func TestResultCollector_Labels(t *testing.T) {
-	now := time.Now()
+	now := metav1.Now()
 	repo := &testRepo{
 		results: []scan.Result{
 			{Source: "flux-repo", Chart: "release-1", Dependency: "common", Type: "fluxcd", Protocol: "oci", Scope: "major", CurrentVersion: "1.0.0", LatestVersion: "2.0.0", UpdateAvailable: true, CheckedAt: now},
@@ -143,7 +144,7 @@ func TestResultCollector_Labels(t *testing.T) {
 }
 
 func TestResultCollector_DynamicState(t *testing.T) {
-	now := time.Now()
+	now := metav1.Now()
 	repo := &testRepo{}
 	collector := NewResultCollector(repo.snap, nil)
 

@@ -13,7 +13,10 @@ import (
 
 // SkippedTag is a tag that outranks the current one by version but was rejected as a stray rather than a release.
 type SkippedTag struct {
-	Tag     string   `json:"tag"`
+	// +kubebuilder:validation:MaxLength=1024
+	Tag string `json:"tag"`
+	// +kubebuilder:validation:MaxItems=50
+	// +kubebuilder:validation:items:MaxLength=4096
 	Reasons []string `json:"reasons"`
 }
 

@@ -2,10 +2,11 @@
 
 ## Prerequisites
 
-- Go 1.26.5+ (the version in the `go` directive of `go.mod`)
+- Go 1.26.10+ (the version in the `go` directive of `go.mod`)
 - `git` binary on `$PATH`
 - `golangci-lint` v2.x (`brew install golangci-lint`)
 - for `make kind`: `kind`, `docker`, `helm`, `kubectl`
+- for `make generate`: nothing extra (`go run` fetches the pinned `controller-gen`)
 
 ## Quick start
 
@@ -41,11 +42,12 @@ Every key the scanner understands (default in parentheses):
 | Key | Effect |
 |---|---|
 | `update_type` (`all`) | highest upgrade level to report: `patch`, `minor`, `all`. `major` is accepted and behaves exactly like `all` — there is no major-only filter, so a major request still reports minor and patch bumps |
-| `parallel_checks` (`5`) | concurrent registry version lookups per scan |
+| `parallel_checks` (`5`) | concurrent registry lookups per repository (two repositories are scanned at a time) |
 | `scan_timeout` (`30m`) | wall-clock budget for one scan — clones, fetches and every registry lookup. On expiry the run is recorded as failed with the timeout in the message, every repository that had not finished included, instead of leaving the dashboard permanently "scanning". `0` removes it; each individual `git` call has its own fixed 5-minute limit |
 | `check_images` (`true`) | container images referenced by Kubernetes workloads |
 | `check_dockerfiles` (`true`) | base images pinned in `Dockerfile`/`Containerfile` `FROM` lines |
 | `verify_image_tags` (`true`) | re-check the winning candidate image tags before reporting them, so backport builds, fork rebuilds and arch-specific leftovers are not offered as updates; `false` reports the highest version-looking tag exactly as the registry lists it |
+| `registry_auth_file` (unset) | a Docker config file (`.dockerconfigjson`) whose static `auths` entries authenticate image and OCI chart lookups |
 | `git_cache_dir` (unset) | clone into a persistent directory instead of a temporary one deleted after the scan. Unset is right locally; in Kubernetes the scan pod has a read-only rootfs, so the chart gives it an `emptyDir` at `/tmp` |
 
 Keys this build does not read are listed in a startup warning with their exact path, and
@@ -177,6 +179,7 @@ the reports it already had.
 make build          # compile → bin/update-checker
 make run            # build + local dashboard (examples/config.yaml, ./data)
 make kind           # kind cluster + local image + chart (KIND_CLUSTER=, VALUES=)
+make generate       # regenerate the CRDs from internal/report after changing the report types
 make test           # go test -race -timeout 120s ./...
 make lint           # golangci-lint run ./...
 make chart-creds    # verify the chart's credential mounts and RBAC/report wiring

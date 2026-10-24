@@ -1,0 +1,161 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: repositoryscans.updatechecker.yuriykovalchuk.dev
+spec:
+  group: updatechecker.yuriykovalchuk.dev
+  names:
+    categories:
+    - updatechecker
+    kind: RepositoryScan
+    listKind: RepositoryScanList
+    plural: repositoryscans
+    shortNames:
+    - repscan
+    singular: repositoryscan
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.counts.outdated
+      name: Outdated
+      type: integer
+    - jsonPath: .status.counts.failed
+      name: Failed
+      type: integer
+    - jsonPath: .status.last_scan_time
+      name: Last Scan
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: RepositoryScan is how the latest scan of one repository went.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          status:
+            description: RepoStatus is the outcome of a repository's latest scan,
+              plus its history.
+            properties:
+              counts:
+                description: Counts summarize a repository's references.
+                properties:
+                  checked:
+                    minimum: 0
+                    type: integer
+                  failed:
+                    minimum: 0
+                    type: integer
+                  outdated:
+                    minimum: 0
+                    type: integer
+                required:
+                - checked
+                - failed
+                - outdated
+                type: object
+              error:
+                description: ErrorInfo is a classified failure.
+                properties:
+                  kind:
+                    description: Kind is one cause of failure. The values are part
+                      of the API (check_error_kind, repo_errors[].kind) and of the
+                      error_kind metric label.
+                    maxLength: 63
+                    type: string
+                  message:
+                    maxLength: 32768
+                    type: string
+                required:
+                - kind
+                - message
+                type: object
+              history:
+                description: History is newest first, capped by the scanner's --history.
+                items:
+                  description: Run is one entry of a repository's scan history.
+                  properties:
+                    counts:
+                      description: Counts summarize a repository's references.
+                      properties:
+                        checked:
+                          minimum: 0
+                          type: integer
+                        failed:
+                          minimum: 0
+                          type: integer
+                        outdated:
+                          minimum: 0
+                          type: integer
+                      required:
+                      - checked
+                      - failed
+                      - outdated
+                      type: object
+                    error_kind:
+                      description: Kind is one cause of failure. The values are part
+                        of the API (check_error_kind, repo_errors[].kind) and of the
+                        error_kind metric label.
+                      maxLength: 63
+                      type: string
+                    phase:
+                      enum:
+                      - Succeeded
+                      - Failed
+                      type: string
+                    time:
+                      format: date-time
+                      type: string
+                  required:
+                  - counts
+                  - phase
+                  - time
+                  type: object
+                maxItems: 100
+                type: array
+              last_scan_time:
+                format: date-time
+                type: string
+              last_success_time:
+                format: date-time
+                type: string
+              phase:
+                enum:
+                - Succeeded
+                - Failed
+                type: string
+              repo:
+                maxLength: 253
+                type: string
+            required:
+            - counts
+            - last_scan_time
+            - phase
+            - repo
+            type: object
+        required:
+        - status
+        type: object
+    served: true
+    storage: true
+    subresources: {}

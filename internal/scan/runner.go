@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/yuriy-kovalchuk/yk-update-checker/internal/config"
 	"github.com/yuriy-kovalchuk/yk-update-checker/internal/errkind"
 	"github.com/yuriy-kovalchuk/yk-update-checker/internal/extractor"
@@ -338,7 +340,7 @@ func newResult(p pendingCheck, chart string) Result {
 		Protocol:       p.ref.Protocol,
 		CurrentVersion: p.ref.CurrentVersion,
 		FinalStage:     p.ref.FinalStage,
-		CheckedAt:      time.Now(),
+		CheckedAt:      metav1.Now(),
 	}
 }
 
@@ -390,11 +392,11 @@ func (r *Runner) checkImage(ctx context.Context, p pendingCheck, chart string) R
 }
 
 // timePtr omits unknown (zero) times from the JSON.
-func timePtr(t time.Time) *time.Time {
+func timePtr(t time.Time) *metav1.Time {
 	if t.IsZero() {
 		return nil
 	}
-	return &t
+	return &metav1.Time{Time: t}
 }
 
 func runConcurrent[T any](ctx context.Context, items []T, limit int, fn func(context.Context, T)) {

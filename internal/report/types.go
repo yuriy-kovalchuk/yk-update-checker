@@ -1,11 +1,14 @@
 // Package report is the contract between scanner and dashboard: the scanner writes, the dashboard reads.
+// +groupName=updatechecker.yuriykovalchuk.dev
+// +versionName=v1alpha1
 package report
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
-	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/yuriy-kovalchuk/yk-update-checker/internal/errkind"
 	"github.com/yuriy-kovalchuk/yk-update-checker/internal/scan"
@@ -31,61 +34,80 @@ const (
 	PhaseFailed    = "Failed"
 )
 
-// Meta is the part of Kubernetes object metadata the reports use.
-type Meta struct {
-	Name   string            `json:"name"`
-	Labels map[string]string `json:"labels,omitempty"`
-}
-
 // RepositoryScan is how the latest scan of one repository went.
+// +kubebuilder:object:root=true
+// +kubebuilder:resource:shortName=repscan,categories=updatechecker
+// +kubebuilder:printcolumn:name=Phase,type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name=Outdated,type=integer,JSONPath=`.status.counts.outdated`
+// +kubebuilder:printcolumn:name=Failed,type=integer,JSONPath=`.status.counts.failed`
+// +kubebuilder:printcolumn:name=Last Scan,type=date,JSONPath=`.status.last_scan_time`
 type RepositoryScan struct {
-	Meta   Meta       `json:"metadata"`
-	Status RepoStatus `json:"status"`
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Status            RepoStatus `json:"status"`
 }
 
 // RepoStatus is the outcome of a repository's latest scan, plus its history.
 type RepoStatus struct {
-	Repo            string     `json:"repo"`
-	Phase           string     `json:"phase"`
-	LastScanTime    time.Time  `json:"last_scan_time"`
-	LastSuccessTime *time.Time `json:"last_success_time,omitempty"`
-	Error           *ErrorInfo `json:"error,omitempty"`
-	Counts          Counts     `json:"counts"`
-	History         []Run      `json:"history,omitempty"` // newest first, capped by the scanner's --history
+	// +kubebuilder:validation:MaxLength=253
+	Repo string `json:"repo"`
+	// +kubebuilder:validation:Enum=Succeeded;Failed
+	Phase           string       `json:"phase"`
+	LastScanTime    metav1.Time  `json:"last_scan_time"`
+	LastSuccessTime *metav1.Time `json:"last_success_time,omitempty"`
+	Error           *ErrorInfo   `json:"error,omitempty"`
+	Counts          Counts       `json:"counts"`
+	// History is newest first, capped by the scanner's --history.
+	// +kubebuilder:validation:MaxItems=100
+	History []Run `json:"history,omitempty"`
 }
 
 // ErrorInfo is a classified failure.
 type ErrorInfo struct {
-	Kind    errkind.Kind `json:"kind"`
-	Message string       `json:"message"`
+	Kind errkind.Kind `json:"kind"`
+	// +kubebuilder:validation:MaxLength=32768
+	Message string `json:"message"`
 }
 
 // Counts summarize a repository's references.
 type Counts struct {
-	Checked  int `json:"checked"`
+	// +kubebuilder:validation:Minimum=0
+	Checked int `json:"checked"`
+	// +kubebuilder:validation:Minimum=0
 	Outdated int `json:"outdated"`
-	Failed   int `json:"failed"`
+	// +kubebuilder:validation:Minimum=0
+	Failed int `json:"failed"`
 }
 
 // Run is one entry of a repository's scan history.
 type Run struct {
-	Time      time.Time    `json:"time"`
+	Time metav1.Time `json:"time"`
+	// +kubebuilder:validation:Enum=Succeeded;Failed
 	Phase     string       `json:"phase"`
 	Counts    Counts       `json:"counts"`
 	ErrorKind errkind.Kind `json:"error_kind,omitempty"`
 }
 
 // Dependency is one checked reference.
+// +kubebuilder:object:root=true
+// +kubebuilder:resource:shortName=dep,categories=updatechecker
+// +kubebuilder:printcolumn:name=Type,type=string,JSONPath=`.status.type`
+// +kubebuilder:printcolumn:name=Dependency,type=string,JSONPath=`.status.dependency`
+// +kubebuilder:printcolumn:name=Current,type=string,JSONPath=`.status.current_version`
+// +kubebuilder:printcolumn:name=Latest,type=string,JSONPath=`.status.latest_version`
+// +kubebuilder:printcolumn:name=Scope,type=string,JSONPath=`.status.scope`
+// +kubebuilder:printcolumn:name=Outdated Since,type=date,JSONPath=`.status.outdated_since`
 type Dependency struct {
-	Meta   Meta      `json:"metadata"`
-	Status DepStatus `json:"status"`
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Status            DepStatus `json:"status"`
 }
 
 // DepStatus is the scan result plus what only history can tell.
 type DepStatus struct {
-	scan.Result
-	OutdatedSince *time.Time `json:"outdated_since,omitempty"` // first scan that found it behind
-	LatestSeenAt  *time.Time `json:"latest_seen_at,omitempty"` // first scan that saw latest_version
+	scan.Result   `json:",inline"`
+	OutdatedSince *metav1.Time `json:"outdated_since,omitempty"` // first scan that found it behind
+	LatestSeenAt  *metav1.Time `json:"latest_seen_at,omitempty"` // first scan that saw latest_version
 }
 
 // RepoID is a short, stable, label-safe identifier of a repository name.

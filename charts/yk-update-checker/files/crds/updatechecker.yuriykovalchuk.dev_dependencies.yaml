@@ -1,0 +1,192 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: dependencies.updatechecker.yuriykovalchuk.dev
+spec:
+  group: updatechecker.yuriykovalchuk.dev
+  names:
+    categories:
+    - updatechecker
+    kind: Dependency
+    listKind: DependencyList
+    plural: dependencies
+    shortNames:
+    - dep
+    singular: dependency
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.type
+      name: Type
+      type: string
+    - jsonPath: .status.dependency
+      name: Dependency
+      type: string
+    - jsonPath: .status.current_version
+      name: Current
+      type: string
+    - jsonPath: .status.latest_version
+      name: Latest
+      type: string
+    - jsonPath: .status.scope
+      name: Scope
+      type: string
+    - jsonPath: .status.outdated_since
+      name: Outdated Since
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Dependency is one checked reference.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          status:
+            description: DepStatus is the scan result plus what only history can tell.
+            properties:
+              chart:
+                maxLength: 4096
+                type: string
+              check_error:
+                maxLength: 32768
+                type: string
+              check_error_kind:
+                description: CheckErrorKind classifies CheckError (auth, not_found,
+                  unreachable, ...; see internal/errkind) so the dashboard can say
+                  what to check.
+                maxLength: 63
+                type: string
+              checked_at:
+                format: date-time
+                type: string
+              current_pushed_at:
+                description: CurrentPushedAt and LatestPushedAt are the tags' last
+                  push dates, when the registry's vendor API reports them (Docker
+                  Hub, Quay, Harbor).
+                format: date-time
+                type: string
+              current_resolved:
+                description: CurrentResolved is the version a floating tag such as
+                  :latest actually points at today, read from OCI image metadata.
+                maxLength: 1024
+                type: string
+              current_version:
+                maxLength: 1024
+                type: string
+              dependency:
+                maxLength: 4096
+                type: string
+              digest_changed:
+                description: DigestChanged is true when the digest differs from the
+                  previous scan, or from the digest the manifest reference pins.
+                type: boolean
+              final_stage:
+                description: FinalStage marks the FROM line whose stage produces the
+                  image a build publishes; intermediate stages are false.
+                type: boolean
+              image_digest:
+                description: ImageDigest is what the checked reference points at now;
+                  comparing it across scans reveals that a mutable tag moved.
+                maxLength: 1024
+                type: string
+              kind:
+                description: Kind is the manifest kind the reference lives in ("Deployment",
+                  "HelmRelease", …); empty for a bare Chart.yaml dependency.
+                maxLength: 253
+                type: string
+              latest_pushed_at:
+                format: date-time
+                type: string
+              latest_seen_at:
+                format: date-time
+                type: string
+              latest_version:
+                maxLength: 1024
+                type: string
+              note:
+                description: Note explains how a non-version comparison was decided.
+                maxLength: 32768
+                type: string
+              outdated_since:
+                format: date-time
+                type: string
+              path:
+                maxLength: 4096
+                type: string
+              protocol:
+                maxLength: 63
+                type: string
+              scope:
+                maxLength: 63
+                type: string
+              skipped:
+                description: Skipped lists image tags that outrank the current one
+                  by version but were rejected as strays rather than releases.
+                items:
+                  description: SkippedTag is a tag that outranks the current one by
+                    version but was rejected as a stray rather than a release.
+                  properties:
+                    reasons:
+                      items:
+                        maxLength: 4096
+                        type: string
+                      maxItems: 50
+                      type: array
+                    tag:
+                      maxLength: 1024
+                      type: string
+                  required:
+                  - reasons
+                  - tag
+                  type: object
+                maxItems: 50
+                type: array
+              source:
+                maxLength: 253
+                type: string
+              tag_kind:
+                description: TagKind is how an image tag is versioned (semver, calver,
+                  date, build, floating, opaque); empty for charts.
+                maxLength: 63
+                type: string
+              type:
+                maxLength: 63
+                type: string
+              update_available:
+                type: boolean
+            required:
+            - chart
+            - checked_at
+            - current_version
+            - dependency
+            - latest_version
+            - protocol
+            - scope
+            - source
+            - type
+            - update_available
+            type: object
+        required:
+        - status
+        type: object
+    served: true
+    storage: true
+    subresources: {}

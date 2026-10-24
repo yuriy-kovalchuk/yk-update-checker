@@ -1,6 +1,8 @@
 package dashboard
 
 import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"context"
 	"encoding/json"
 	"errors"
@@ -136,7 +138,7 @@ func TestResultsEmptyIsJSONArray(t *testing.T) {
 }
 
 func TestStatusSummarizesRepositories(t *testing.T) {
-	older, newer := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	older, newer := metav1.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), metav1.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
 	snap := report.Snapshot{
 		Repos: []report.RepositoryScan{
 			{Status: report.RepoStatus{Repo: "ok", LastScanTime: older, Phase: report.PhaseSucceeded}},
@@ -149,7 +151,7 @@ func TestStatusSummarizesRepositories(t *testing.T) {
 	if err := json.Unmarshal(get(newTestMux(snap, fakeTrigger{available: true, running: true}), http.MethodGet, "/api/status").Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if !got.Scanning || !got.TriggerAvailable || got.ResultCount != 3 || got.LastScanAt == nil || !got.LastScanAt.Equal(newer) {
+	if !got.Scanning || !got.TriggerAvailable || got.ResultCount != 3 || got.LastScanAt == nil || !got.LastScanAt.Equal(newer.Time) {
 		t.Errorf("status = %+v, want scanning, 3 results, last scan %v", got, newer)
 	}
 	if got.LastErrorKind != errkind.Auth || len(got.RepoErrors) != 1 || got.RepoErrors[0].Repo != "bad" {

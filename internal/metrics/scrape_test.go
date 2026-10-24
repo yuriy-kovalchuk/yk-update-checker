@@ -1,12 +1,13 @@
 package metrics
 
 import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 	"unicode/utf8"
 
 	"github.com/yuriy-kovalchuk/yk-update-checker/internal/errkind"
@@ -15,7 +16,7 @@ import (
 )
 
 func TestExporter_HTTPEndpoint(t *testing.T) {
-	now := time.Now()
+	now := metav1.Now()
 	repo := &testRepo{
 		results: []scan.Result{
 			{Source: "gitops", Chart: "app-a", Dependency: "nginx", Type: "helm", Protocol: "https", Scope: "major", CurrentVersion: "1.0.0", LatestVersion: "2.0.0", UpdateAvailable: true, CheckedAt: now},
@@ -63,7 +64,7 @@ func TestExporter_HTTPEndpoint(t *testing.T) {
 }
 
 func TestExporter_DynamicResultsReflectInScrape(t *testing.T) {
-	now := time.Now()
+	now := metav1.Now()
 	repo := &testRepo{} // empty initially
 	exp := Handler(repo.snap, nil)
 
@@ -95,7 +96,7 @@ func TestExporter_DynamicResultsReflectInScrape(t *testing.T) {
 }
 
 func TestExporter_DashboardQueryCompatibility(t *testing.T) {
-	now := time.Now()
+	now := metav1.Now()
 	repo := &testRepo{
 		results: []scan.Result{
 			{Source: "s1", Chart: "c1", Dependency: "d1", Type: "helm", Protocol: "https", Scope: "major", CurrentVersion: "1.0", LatestVersion: "2.0", UpdateAvailable: true, CheckedAt: now},
@@ -150,7 +151,7 @@ func TestExporter_DashboardQueryCompatibility(t *testing.T) {
 
 // TestExporter_CollidingLabelSetsStillScrape reproduces two results colliding on every label.
 func TestExporter_CollidingLabelSetsStillScrape(t *testing.T) {
-	now := time.Now()
+	now := metav1.Now()
 	pinned := func(file string) scan.Result {
 		return scan.Result{
 			Source: "lab", Chart: "Dockerfile/build", Dependency: "alpine",
@@ -201,7 +202,7 @@ func scrape(t *testing.T, exp http.Handler) string {
 
 // TestExporter_KindPathAndTagKindLabels: a scrape says what kind of thing is outdated, where, and what its tag looks like.
 func TestExporter_KindPathAndTagKindLabels(t *testing.T) {
-	now := time.Now()
+	now := metav1.Now()
 	repo := &testRepo{
 		results: []scan.Result{
 			{Source: "lab", Chart: "frontend", Dependency: "nginx", Type: "image", Kind: "Deployment", Protocol: "image", Path: "k8s/deploy.yaml", TagKind: "calver", Scope: "minor", CurrentVersion: "2024.01", LatestVersion: "2024.06", UpdateAvailable: true, CheckedAt: now},
@@ -226,7 +227,7 @@ func TestExporter_KindPathAndTagKindLabels(t *testing.T) {
 
 // TestExporter_ScannedCountsWithoutUpdates: coverage is unanswerable from a presence-only metric, so scanned carries the count.
 func TestExporter_ScannedCountsWithoutUpdates(t *testing.T) {
-	now := time.Now()
+	now := metav1.Now()
 	repo := &testRepo{
 		results: []scan.Result{
 			{Source: "lab", Chart: "c", Dependency: "old", Type: "helm", Protocol: "https", Scope: "minor", CurrentVersion: "1.0", LatestVersion: "2.0", UpdateAvailable: true, CheckedAt: now},
@@ -254,7 +255,7 @@ func TestExporter_ScannedCountsWithoutUpdates(t *testing.T) {
 
 // TestExporter_DigestDriftSeries makes the drift signal the UI already shows alertable.
 func TestExporter_DigestDriftSeries(t *testing.T) {
-	now := time.Now()
+	now := metav1.Now()
 	repo := &testRepo{
 		results: []scan.Result{
 			{Source: "lab", Chart: "frontend", Dependency: "nginx", Type: "image", Kind: "Deployment", Protocol: "image", Path: "k8s/deploy.yaml", CurrentVersion: "latest", LatestVersion: "latest", DigestChanged: true, Note: "floating tag moved from sha256:1111 to sha256:2222", CheckedAt: now},
@@ -274,7 +275,7 @@ func TestExporter_DigestDriftSeries(t *testing.T) {
 
 // TestExporter_LabelValuesAreBounded: label values copied from scanned content must not reach Prometheus unbounded.
 func TestExporter_LabelValuesAreBounded(t *testing.T) {
-	now := time.Now()
+	now := metav1.Now()
 	long := strings.Repeat("a", 500)
 	repo := &testRepo{
 		results: []scan.Result{
@@ -330,7 +331,7 @@ func TestExporter_FailedAndSkippedPerReference(t *testing.T) {
 
 // TestExporter_FollowerIsSilent: only the leader exports result metrics, so each alert fires once.
 func TestExporter_FollowerIsSilent(t *testing.T) {
-	repo := &testRepo{results: []scan.Result{{Source: "s", Dependency: "d", UpdateAvailable: true}}, scannedAt: time.Now()}
+	repo := &testRepo{results: []scan.Result{{Source: "s", Dependency: "d", UpdateAvailable: true}}, scannedAt: metav1.Now()}
 	body := scrape(t, Handler(repo.snap, func() bool { return false }))
 	if strings.Contains(body, "update_checker_") {
 		t.Errorf("a follower exported result metrics:\n%s", body)

@@ -9,6 +9,7 @@ import (
 )
 
 // Kind is one cause of failure. The values are part of the API (check_error_kind, repo_errors[].kind) and of the error_kind metric label.
+// +kubebuilder:validation:MaxLength=63
 type Kind string
 
 // The failure kinds.

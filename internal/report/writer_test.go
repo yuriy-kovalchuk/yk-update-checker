@@ -1,6 +1,8 @@
 package report
 
 import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"context"
 	"errors"
 	"os"
@@ -9,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/yuriy-kovalchuk/yk-update-checker/internal/errkind"
 	"github.com/yuriy-kovalchuk/yk-update-checker/internal/scan"
@@ -30,7 +31,7 @@ func TestWriterRecordsAndUpdatesInPlace(t *testing.T) {
 		t.Fatal(err)
 	}
 	first, _ := f.ListDependencies(ctx, RepoID("homelab"))
-	since := map[string]*time.Time{}
+	since := map[string]*metav1.Time{}
 	for _, d := range first {
 		since[d.Status.Dependency] = d.Status.OutdatedSince
 	}
@@ -48,7 +49,7 @@ func TestWriterRecordsAndUpdatesInPlace(t *testing.T) {
 	if len(byDep) != 3 {
 		t.Fatalf("dependencies = %d, want 3", len(byDep))
 	}
-	if a := byDep["a"]; !a.Status.DigestChanged || a.Status.OutdatedSince == nil || !a.Status.OutdatedSince.Equal(*since["a"]) {
+	if a := byDep["a"]; !a.Status.DigestChanged || a.Status.OutdatedSince == nil || !a.Status.OutdatedSince.Equal(since["a"]) {
 		t.Errorf("a = %+v, want drift flagged and outdated_since kept from the first scan", a.Status)
 	}
 	if modTime(t, f, "b", deps) != stamp {
@@ -92,7 +93,7 @@ func modTime(t *testing.T, f Files, dep string, deps []Dependency) int64 {
 	t.Helper()
 	for _, d := range deps {
 		if d.Status.Dependency == dep {
-			info, err := os.Stat(filepath.Join(f.Dir, "dependencies", d.Meta.Name+".json"))
+			info, err := os.Stat(filepath.Join(f.Dir, "dependencies", d.Name+".json"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -150,7 +151,7 @@ func TestConcurrentWritesStayParseable(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			d := Dependency{Meta: Meta{Name: "same"}, Status: DepStatus{Result: scan.Result{Dependency: strings.Repeat("x", 1000*(i+1))}}}
+			d := Dependency{ObjectMeta: metav1.ObjectMeta{Name: "same"}, Status: DepStatus{Result: scan.Result{Dependency: strings.Repeat("x", 1000*(i+1))}}}
 			if err := f.PutDependency(context.Background(), &d); err != nil {
 				t.Error(err)
 			}
@@ -207,7 +208,7 @@ func TestWriterLabelsTheRelease(t *testing.T) {
 	}
 	repos, _ := f.ListRepositoryScans(ctx)
 	deps, _ := f.ListDependencies(ctx, "")
-	if repos[0].Meta.Labels[LabelInstance] != "prod" || deps[0].Meta.Labels[LabelInstance] != "prod" {
-		t.Errorf("labels %v / %v, want app.kubernetes.io/instance=prod on both kinds", repos[0].Meta.Labels, deps[0].Meta.Labels)
+	if repos[0].Labels[LabelInstance] != "prod" || deps[0].Labels[LabelInstance] != "prod" {
+		t.Errorf("labels %v / %v, want app.kubernetes.io/instance=prod on both kinds", repos[0].Labels, deps[0].Labels)
 	}
 }

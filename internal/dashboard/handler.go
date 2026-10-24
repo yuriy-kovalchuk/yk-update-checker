@@ -103,7 +103,7 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 	}
 	var msgs []string
 	for _, rs := range snap.Repos {
-		if t := rs.Status.LastScanTime; st.LastScanAt == nil || t.After(*st.LastScanAt) {
+		if t := rs.Status.LastScanTime.Time; st.LastScanAt == nil || t.After(*st.LastScanAt) {
 			st.LastScanAt = &t
 		}
 		if e := rs.Status.Error; e != nil {

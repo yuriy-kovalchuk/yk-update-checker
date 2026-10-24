@@ -77,7 +77,7 @@ Reports are objects, not memory, and they are the only channel between the two h
 
 - **`RepositoryScan`** (one per repository): `phase` (Succeeded/Failed), `last_scan_time`, `last_success_time`, the classified `error`, `counts` (checked/outdated/failed) and `history` — the last N runs (`scan --history`, default 10, newest first). Named after the repository name plus a hash of it.
 - **`Dependency`** (one per checked reference): the scan result itself plus `outdated_since` (first scan that found it behind) and `latest_seen_at` (first scan that saw the current `latest_version`). Its name is a hash of the reference's identity — source, type, path, chart, dependency and pinned version — so a rescan updates the same object, and a new pin is a new object. References that disappear from the repository are deleted; only references that changed are written.
-- Both kinds are `updatechecker.yuriykovalchuk.dev/v1alpha1`, `Namespaced`, with `x-kubernetes-preserve-unknown-fields` on `status` and no status subresource (the writer sends the whole object). `kubectl get repscan` / `kubectl get dep` show the useful columns.
+- Both kinds are `updatechecker.yuriykovalchuk.dev/v1alpha1`, `Namespaced`, with a typed, bounded `status` schema generated from the Go types by `make generate` (a field the schema does not declare is pruned, so a new field needs a regenerate; CI fails on a stale schema) and no status subresource (the writer sends the whole object). `kubectl get repscan` / `kubectl get dep` show the useful columns, `kubectl get updatechecker` both kinds.
 - Locally the same two kinds are JSON files under `--data` — see "Where the reports live" below.
 
 There is no per-run copy of the items: etcd is not a time-series database. A repository whose scan failed keeps its previous dependencies (so its outdated alerts do not silently resolve) and gains `phase: Failed` plus the error kind — and the same for a scan that hit `scan_timeout`: every repository that had not finished is recorded as failed with that error rather than left looking unchanged.
@@ -157,7 +157,7 @@ Measured cost per reference: ~1.3 KB in etcd and ~2 KB of dashboard heap, plus ~
 short-lived allocation per poll, so the default 128Mi dashboard is comfortable up to ~10,000.
 
 Only one scan runs at a time, whatever started it: the scan holds a Lease (`<fullname>-scan`) in
-the cluster, or an exclusive lock on `<data>/.scan.lock` locally; a second scan exits with an error.
+the cluster, or an exclusive lock on `<data>/.scan.lock` locally; a second scan logs that and exits 0.
 
 ## Package layout
 
@@ -166,20 +166,20 @@ cmd/update-checker/     entrypoint; dashboard and scan wiring, flag parsing, sig
 internal/
   api/                  HTTP server bootstrap, route registration, middleware chain, /health + /ready
   report/               the contract between the two halves:
-    types.go            RepositoryScan, Dependency, names, labels, phases
+    types.go            RepositoryScan, Dependency, names, labels, phases; kubebuilder markers for make generate
     backend.go          Backend interface (list/put/delete)
     kube.go             Kube: dynamic client, create-or-update, one namespace
     file.go             Files: JSON under ./data, written atomically
-    writer.go           Writer.Repo: changed-only writes, stale deletes, outdated_since, history cap
+    writer.go           Writer.Repo: changed-only writes, stale deletes, outdated_since, history cap; Writer.Prune
     poller.go           Poller: latest Snapshot of a Backend
   scan/
     runner.go           RunnerOptions; walk once, run extractors, check versions concurrently, OnRepo per repository
-    types.go            Result, Status
+    types.go            Result
   gitsync/              the only code that runs git or reads a credential: Syncer.Sync, RedactURL
   memlimit/             Go heap limit = 70% of the cgroup memory limit
-  kube/                 Connect() (in-cluster config + namespace) and Env.Leader (Lease election)
+  kube/                 Connect() (in-cluster config + namespace), Env.Leader (Lease election), Env.Lock (scan Lease)
   errkind/              failure kinds: Wrap where understood, Of anywhere
-  dashboard/            GET /, GET /favicon.svg, GET /api/results, GET /api/status, POST /api/scan/trigger, GET /assets/, GET /fonts/; embeds ui/
+  dashboard/            GET /, GET /favicon.svg, GET /api/results, GET /api/status, POST /api/scan/trigger, GET /metrics, GET /assets/, GET /fonts/; embeds ui/
   extractor/            Extractor interface over *File (YAML parsed once) + HelmChart, FluxCD, Images and Dockerfile
   registry/             version resolution: HTTPS index.yaml, OCI tag listing, container image tags; scope.go (all
                         version comparison), vendor.go (one dialect per vendor tag API), client.go (limits, HTTP client)
@@ -499,8 +499,8 @@ The chart has two identities and two privilege sets. The dashboard ServiceAccoun
 gets `batch/jobs` (`create`, `get`, `list`), `batch/cronjobs` (`get`), `get`/`list`
 on the two report kinds, and `create` on `leases` plus `get`/`update` on its own
 Lease — **no `secrets` verbs**. The scanner ServiceAccount gets `get`, `list`,
-`create`, `update`, `delete` on the two report kinds and nothing else, which is
-all `report.Kube` does; that pod is the one holding the credentials and reading
+`create`, `update`, `delete` on the two report kinds, plus `create` on `leases`
+and `get`/`update` on the scan Lease (one scan at a time), and nothing else; that pod is the one holding the credentials and reading
 untrusted repository content, so it must not be able to create a Job, read a
 ConfigMap or touch a Secret. As the table row above says, `jobs: create` reaches
 Secrets transitively, so that right stays on the dashboard, which parses no

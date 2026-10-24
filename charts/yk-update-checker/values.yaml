@@ -150,9 +150,14 @@ scanner:
       drop:
         - ALL
 
+# ── CRDs ──────────────────────────────────────────────────────────────────────
+# The RepositoryScan and Dependency CRDs; cluster-wide, so only one release in the cluster may install them.
+crds:
+  install: true
+
 # ── RBAC (needed by both halves) ──────────────────────────────────────────────
 rbac:
-  # Two Roles: the dashboard's (scan Jobs, report reads, leader Lease) and the scanner's (only the two update-checker resources, because that pod clones hostile content).
+  # Two Roles: the dashboard's (scan Jobs, report reads, leader Lease) and the scanner's (the two report kinds and the scan Lease, because that pod clones hostile content).
   create: true
 
 serviceAccount:

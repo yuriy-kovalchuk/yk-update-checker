@@ -1,4 +1,4 @@
-.PHONY: build run test lint chart-creds kind docker-build docker-push install-hooks
+.PHONY: build generate run test lint chart-creds kind docker-build docker-push install-hooks
 
 CONFIG       ?= examples/config.yaml
 IMAGE        ?= ghcr.io/yuriy-kovalchuk/yk-update-checker
@@ -6,6 +6,7 @@ VERSION      ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo
 PLATFORMS    ?= linux/amd64,linux/arm64
 TAG_LATEST   ?= false
 KIND_CLUSTER ?= update-checker
+CONTROLLER_GEN ?= v0.20.1
 VALUES       ?= examples/test-values.yaml
 GIT_COMMIT   := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 BUILD_DATE   := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -14,6 +15,10 @@ LDFLAGS      := -s -w -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Com
 
 build: ## compile bin/update-checker
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o bin/update-checker ./cmd/update-checker
+
+generate: ## CRDs from the report types into the chart
+	rm -rf charts/yk-update-checker/files/crds
+	go run sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN) crd paths=./internal/report/... output:crd:dir=charts/yk-update-checker/files/crds
 
 run: build ## local dashboard: reports in ./data, scans as child processes
 	bin/update-checker dashboard --mode=local --config $(CONFIG) --verbose

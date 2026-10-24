@@ -88,14 +88,15 @@ bindings=$(render "rolebinding render" creds "$chart" -s templates/rolebinding.y
 [ "$(grep -c "^kind: ServiceAccount$" <<<"$bindings")" -eq 2 ] || fail "expected two ServiceAccounts"
 
 # The CRDs are the storage contract between the two halves, so their group must be the one internal/report writes.
-crds=$(render "crd render" crds "$chart" --include-crds)
+crds=$(render "crd render" crds "$chart")
 group=$(sed -n 's/.*Group  *= *"\(.*\)".*/\1/p' internal/report/types.go)
 for kind in repositoryscans dependencies; do
-  grep -q "^  name: $kind\.$group\$" <<<"$crds" || fail "crds/: no CustomResourceDefinition for $kind.$group"
+  grep -q "^  name: $kind\.$group\$" <<<"$crds" || fail "files/crds: no CustomResourceDefinition for $kind.$group (run make generate)"
 done
-grep -q "x-kubernetes-preserve-unknown-fields: true" <<<"$crds" ||
-  fail "CRD status is pruned: the API server would drop the report fields"
-if grep -q "subresources:" <<<"$crds"; then fail "CRDs have a status subresource; the writer sends the whole object"; fi
+grep -q "categories:" <<<"$crds" || fail "CRDs lack the updatechecker category"
+if grep -A1 "subresources:" <<<"$crds" | grep -q "status:"; then fail "CRDs have a status subresource; the writer sends the whole object"; fi
+[ "$(grep -c "helm.sh/resource-policy: keep" <<<"$crds")" = 2 ] || fail "CRDs are not kept on uninstall: deleting them deletes every report"
+if render "crds off" crds-off "$chart" --set crds.install=false | grep -q "kind: CustomResourceDefinition"; then fail "crds.install=false still renders CRDs"; fi
 
 # The alert that says a scan broke, since a failed scan leaves the outdated series looking unchanged.
 rules=$(render "rule render" h "$chart" -s templates/prometheusrule.yaml --set metrics.prometheusRule.enabled=true)

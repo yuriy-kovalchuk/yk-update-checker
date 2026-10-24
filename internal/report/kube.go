@@ -29,7 +29,7 @@ func (k Kube) ListRepositoryScans(ctx context.Context) ([]RepositoryScan, error)
 
 // PutRepositoryScan implements Backend.
 func (k Kube) PutRepositoryScan(ctx context.Context, rs *RepositoryScan) error {
-	return k.apply(ctx, repoScans, "RepositoryScan", rs.Meta.Name, rs)
+	return k.apply(ctx, repoScans, "RepositoryScan", rs.Name, rs)
 }
 
 // ListDependencies implements Backend.
@@ -43,7 +43,7 @@ func (k Kube) ListDependencies(ctx context.Context, repoID string) ([]Dependency
 
 // PutDependency implements Backend.
 func (k Kube) PutDependency(ctx context.Context, d *Dependency) error {
-	return k.apply(ctx, dependencies, "Dependency", d.Meta.Name, d)
+	return k.apply(ctx, dependencies, "Dependency", d.Name, d)
 }
 
 // DeleteRepositoryScan implements Backend.
@@ -74,6 +74,10 @@ func (k Kube) apply(ctx context.Context, gvr schema.GroupVersionResource, kind, 
 	if err := json.Unmarshal(body, &u.Object); err != nil {
 		return err
 	}
+	labels := u.GetLabels()
+	u.Object["metadata"] = map[string]any{} // drop what the server set when this object was read
+	u.SetName(name)
+	u.SetLabels(labels)
 	u.SetAPIVersion(APIVersion)
 	u.SetKind(kind)
 	u.SetNamespace(k.Namespace)

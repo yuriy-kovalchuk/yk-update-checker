@@ -27,7 +27,7 @@ Port-forward to reach the dashboard locally:
 Then open: http://127.0.0.1:8080
 {{- end }}
 
-To trigger a scan manually from the dashboard, click the "Trigger Scan" button.
+To trigger a scan manually from the dashboard, click "Scan now".
 
 To trigger via kubectl:
   kubectl --namespace {{ .Release.Namespace }} create job \

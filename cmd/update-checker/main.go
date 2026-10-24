@@ -116,37 +116,23 @@ func runScan(ctx context.Context, args []string) error {
 		return err
 	}
 	setup(*verbose)
+	if *history < 0 || *history > report.MaxHistory {
+		return fmt.Errorf("--history must be between 0 and %d", report.MaxHistory)
+	}
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	var writer *report.Writer
-	switch *store {
-	case "none":
-	case "file":
-		files := report.Files{Dir: *data}
-		unlock, err := files.Lock()
-		if err != nil {
-			return err
-		}
-		defer unlock()
-		writer = &report.Writer{Backend: files, History: *history, Instance: *instance}
-	case "kubernetes":
-		reports, env, err := kubeReports()
-		if err != nil {
-			return err
-		}
-		held, release, err := env.Lock(ctx, *lock)
-		if err != nil {
-			return err
-		}
-		defer release()
-		ctx = held // losing the Lease stops the scan
-		writer = &report.Writer{Backend: reports, History: *history, Instance: *instance}
-	default:
-		return fmt.Errorf("--store must be none, file or kubernetes, got %q", *store)
+	writer, ctx, release, err := openStore(ctx, *store, *data, *lock, report.Writer{History: *history, Instance: *instance})
+	if errors.Is(err, trigger.ErrAlreadyRunning) {
+		slog.Info("another scan holds the lock; nothing to do")
+		return nil
 	}
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	var mu sync.Mutex
 	done := map[string]bool{}
@@ -195,6 +181,28 @@ func runScan(ctx context.Context, args []string) error {
 		return fmt.Errorf("scan finished with %d repo failure(s): %w", len(repoErrs), errors.Join(repoErrs...))
 	}
 	return nil
+}
+
+// openStore returns the writer --store names (nil prints JSON) holding the scan lock, the context that ends if the lock is lost, and its release.
+func openStore(ctx context.Context, store, data, lease string, w report.Writer) (*report.Writer, context.Context, func(), error) {
+	switch store {
+	case "none":
+		return nil, ctx, func() {}, nil
+	case "file":
+		files := report.Files{Dir: data}
+		w.Backend = files
+		unlock, err := files.Lock()
+		return &w, ctx, unlock, err
+	case "kubernetes":
+		reports, env, err := kubeReports()
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		w.Backend = reports
+		held, release, err := env.Lock(ctx, lease)
+		return &w, held, release, err
+	}
+	return nil, nil, nil, fmt.Errorf("--store must be none, file or kubernetes, got %q", store)
 }
 
 // kubeReports connects to the cluster and returns the custom-resource report store.
