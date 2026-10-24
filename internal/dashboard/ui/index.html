@@ -1,606 +1,113 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Update Checker</title>
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-  <style>
-    :root {
-      --bg:          #0d1117;
-      --surface:     #161b22;
-      --surface-alt: #1c2128;
-      --surface-hi:  #21262d;
-      --border:      #30363d;
-      --border-hi:   #21262d;
-      --text:        #c9d1d9;
-      --text-muted:  #8b949e;
-      --primary:     #58a6ff;
-      --primary-bg:  rgba(88,166,255,.12);
-      --green:       #3fb950;
-      --green-bg:    rgba(63,185,80,.12);
-      --yellow:      #e3b341;
-      --yellow-bg:   rgba(227,179,65,.12);
-      --red:         #f85149;
-      --purple:      #a78bfa;
-      --purple-bg:   rgba(167,139,250,.12);
-      --radius:      6px;
-      --ease:        150ms ease;
-    }
-
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    body {
-      font-family: system-ui, -apple-system, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-      font-size: 14px;
-      line-height: 1.5;
-    }
-
-    .app-bar {
-      position: sticky;
-      top: 0;
-      z-index: 50;
-      height: 56px;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 0 24px;
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-    }
-
-    .app-bar-brand {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-size: 16px;
-      font-weight: 500;
-    }
-
-    .app-bar-spacer { flex: 1; }
-
-    .app-bar-version {
-      font-size: 11px;
-      color: var(--text-muted);
-      font-family: monospace;
-    }
-
-    .chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 3px 10px;
-      border-radius: 12px;
-      font-size: 12px;
-      font-weight: 500;
-    }
-
-    .chip-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: currentColor;
-    }
-
-    .chip.idle     { background: var(--green-bg);   color: var(--green); }
-    .chip.scanning { background: var(--primary-bg); color: var(--primary); }
-    .chip.scanning .chip-dot { animation: blink 1.2s ease-in-out infinite; }
-
-    @keyframes blink { 0%,100% { opacity:1 } 50% { opacity:.3 } }
-
-    .scan-error {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 10px 14px;
-      margin-bottom: 16px;
-      border-radius: var(--radius);
-      border: 1px solid rgba(248, 81, 73, .4);
-      background: rgba(248, 81, 73, .12);
-      color: var(--red);
-      font-size: 13px;
-    }
-
-    .scan-error.hidden { display: none; }
-
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 7px 16px;
-      border-radius: 20px;
-      border: none;
-      cursor: pointer;
-      font-family: inherit;
-      font-size: 13px;
-      font-weight: 500;
-      background: var(--primary);
-      color: #0d1117;
-    }
-
-    .btn:hover { filter: brightness(1.12); }
-    .btn:disabled { opacity: .45; cursor: not-allowed; filter: none; }
-    .btn.hidden { display: none; }
-
-    .page { max-width: 1600px; margin: 0 auto; padding: 24px; }
-
-    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap: 14px; margin-bottom: 22px; }
-
-    .stat-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 16px 18px;
-    }
-
-    .stat-label {
-      font-size: 11px;
-      font-weight: 500;
-      text-transform: uppercase;
-      letter-spacing: .05em;
-      color: var(--text-muted);
-      margin-bottom: 6px;
-    }
-
-    .stat-value { font-size: 28px; font-weight: 300; }
-    .stat-value.c-yellow { color: var(--yellow); }
-    .stat-value.c-green  { color: var(--green);  }
-
-    .card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      overflow: hidden;
-    }
-
-    .toolbar {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 10px 16px;
-      background: var(--surface-hi);
-      border-bottom: 1px solid var(--border);
-      flex-wrap: wrap;
-    }
-
-    .scan-meta {
-      font-size: 12px;
-      color: var(--text-muted);
-      display: flex;
-      align-items: center;
-      gap: 5px;
-    }
-
-    .toolbar-spacer { flex: 1; }
-
-    .search {
-      background: var(--surface-alt);
-      border: 1px solid var(--border);
-      border-radius: 18px;
-      padding: 5px 14px 5px 32px;
-      color: var(--text);
-      font-family: inherit;
-      font-size: 13px;
-      width: 220px;
-      outline: none;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' fill='%238b949e'%3E%3Ccircle cx='6' cy='6' r='5' fill='none' stroke='%238b949e'/%3E%3Cline x1='10' y1='10' x2='13' y2='13' stroke='%238b949e'/%3E%3C/svg%3E");
-      background-repeat: no-repeat;
-      background-position: 10px center;
-    }
-
-    .search:focus { border-color: var(--primary); }
-
-    .filter-sel {
-      background: var(--surface-alt);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 5px 10px;
-      color: var(--text);
-      font-family: inherit;
-      font-size: 13px;
-      cursor: pointer;
-    }
-
-    .tbl-wrap { overflow-x: auto; }
-
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-
-    thead th {
-      background: var(--surface-hi);
-      color: var(--text-muted);
-      font-weight: 500;
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: .05em;
-      padding: 10px 14px;
-      text-align: left;
-      border-bottom: 1px solid var(--border);
-      white-space: nowrap;
-      cursor: pointer;
-    }
-
-    thead th:hover { color: var(--text); }
-
-    tbody tr { border-bottom: 1px solid var(--border-hi); }
-    tbody tr:last-child { border-bottom: none; }
-    tbody tr:hover { background: var(--surface-alt); }
-    tbody tr.has-update { border-left: 3px solid var(--yellow); }
-
-    tbody td { padding: 10px 14px; }
-
-    td.mono { font-family: monospace; font-size: 12px; }
-
-    .badge {
-      display: inline-block;
-      padding: 1px 7px;
-      border-radius: 10px;
-      font-size: 11px;
-      font-weight: 500;
-    }
-
-    .badge-helm   { background: var(--primary-bg); color: var(--primary); }
-    .badge-fluxcd { background: var(--purple-bg);  color: var(--purple);  }
-    .badge-https  { background: var(--green-bg);   color: var(--green);   }
-    .badge-http   { background: var(--green-bg);   color: var(--green);   }
-    .badge-oci    { background: var(--yellow-bg);  color: var(--yellow);  }
-
-    .v-current { color: var(--text-muted); }
-    .v-latest  { color: var(--green); font-weight: 500; }
-    .v-update  { color: var(--yellow); font-weight: 500; }
-    .v-na      { color: var(--text-muted); opacity: .5; }
-    .v-err     { color: var(--red); font-weight: 500; cursor: help; }
-
-    .empty {
-      padding: 60px 16px;
-      text-align: center;
-      color: var(--text-muted);
-    }
-
-    .empty-title {
-      font-size: 18px;
-      color: var(--text);
-      margin-bottom: 6px;
-    }
-
-    #toasts {
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      z-index: 100;
-    }
-
-    .toast {
-      background: var(--surface-hi);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 11px 16px;
-      font-size: 13px;
-      animation: slide-in .2s ease;
-    }
-
-    .toast.ok  { border-left: 3px solid var(--green); }
-    .toast.err { border-left: 3px solid var(--red); }
-
-    @keyframes slide-in { from { transform: translateX(110%); opacity: 0 } }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Update Checker</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/app.css">
 </head>
 <body>
 
-<header class="app-bar">
-  <div class="app-bar-brand">
-    <img src="/favicon.svg" width="24" height="24" alt="" />
-    Update Checker
-  </div>
-  <span id="version-text" class="app-bar-version"></span>
-  <div class="app-bar-spacer"></div>
-  <span id="status-chip" class="chip idle">
-    <span class="chip-dot"></span>
-    <span id="status-text">Ready</span>
-  </span>
-  <button id="scan-btn" class="btn hidden" onclick="triggerScan()">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-      <path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/>
-    </svg>
-    Scan
+<div class="head">
+  <header class="app-bar">
+    <img class="brand-icon" src="/favicon.svg" width="24" height="24" alt="">
+    <div class="brand">
+      <span class="brand-title">Update Checker</span>
+      <span class="brand-sub" id="version-text">v?</span>
+    </div>
+    <span class="spacer"></span>
+    <span class="pill" id="status-chip" title="scanner state">
+      <span class="nf" id="status-icon" aria-hidden="true">&#xf111;</span>
+      <span id="status-text">connecting</span>
+    </span>
+    <span class="pill" id="last-scan" title="last completed scan">
+      <span class="nf" aria-hidden="true">&#xf017;</span>
+      <span id="last-scan-text">never</span>
+    </span>
+    <button class="btn filled hidden" id="scan-btn" type="button" title="trigger a scan now (keyboard: r)">
+      <span class="nf" aria-hidden="true">&#xf021;</span>
+      <span>Scan now</span>
+    </button>
+  </header>
+
+  <nav class="filters" aria-label="filters">
+    <label class="field">
+      <span class="nf" aria-hidden="true">&#xf002;</span>
+      <input id="q" type="text" placeholder="filter by name, workload or file (/)" autocomplete="off" spellcheck="false">
+    </label>
+
+    <span class="segmented" id="f-cat" role="group" aria-label="category">
+      <button class="seg" type="button" data-v="" aria-pressed="true">All</button>
+      <button class="seg" type="button" data-v="image" aria-pressed="false"><img class="logo" src="/assets/logos/kubernetes.svg" alt="" aria-hidden="true">Images</button>
+      <button class="seg" type="button" data-v="dockerfile" aria-pressed="false"><img class="logo" src="/assets/logos/docker.svg" alt="" aria-hidden="true">Dockerfiles</button>
+      <button class="seg" type="button" data-v="helm" aria-pressed="false"><img class="logo" src="/assets/logos/helm.svg" alt="" aria-hidden="true">Helm</button>
+      <button class="seg" type="button" data-v="fluxcd" aria-pressed="false"><img class="logo" src="/assets/logos/flux.svg" alt="" aria-hidden="true">FluxCD</button>
+    </span>
+
+    <span class="segmented" id="f-view" role="group" aria-label="layout">
+      <button class="seg" type="button" data-v="attention" aria-pressed="true" title="what needs action first, everything current folded below">Attention</button>
+      <button class="seg" type="button" data-v="category" aria-pressed="false" title="grouped by images, Dockerfiles, Helm and FluxCD">Category</button>
+    </span>
+
+    <select class="select" id="f-scope" aria-label="update scope">
+      <option value="">any scope</option>
+      <option value="major">major</option>
+      <option value="minor">minor</option>
+      <option value="patch">patch</option>
+      <option value="unknown">unknown</option>
+    </select>
+
+    <span class="filter-count" id="shown-count" aria-live="polite"></span>
+  </nav>
+</div>
+
+<section class="stats" id="stats" aria-label="scan summary; each tile filters the list">
+  <button class="stat" type="button" data-tile="" aria-pressed="false" title="all checks, clears the tile filter">
+    <span class="nf" aria-hidden="true">&#xf03a;</span>
+    <span class="stat-body"><span class="stat-n" id="s-total">0</span><span class="stat-l">checked</span></span>
   </button>
-</header>
+  <button class="stat is-update" type="button" data-tile="updates" aria-pressed="false" title="checks with a newer version">
+    <span class="nf" aria-hidden="true">&#xf178;</span>
+    <span class="stat-body"><span class="stat-n" id="s-updates">0</span><span class="stat-l">updates</span></span>
+  </button>
+  <button class="stat is-major" type="button" data-tile="major" aria-pressed="false" title="major version updates">
+    <span class="nf" aria-hidden="true">&#xf062;</span>
+    <span class="stat-body"><span class="stat-n" id="s-major">0</span><span class="stat-l">major</span></span>
+  </button>
+  <button class="stat is-skipped" type="button" data-tile="skipped" aria-pressed="false" title="stray tags rejected by verification">
+    <span class="nf" aria-hidden="true">&#xf05e;</span>
+    <span class="stat-body"><span class="stat-n" id="s-skipped">0</span><span class="stat-l">skipped</span></span>
+  </button>
+  <button class="stat is-err" type="button" data-tile="errors" aria-pressed="false" title="lookups that failed">
+    <span class="nf" aria-hidden="true">&#xf071;</span>
+    <span class="stat-body"><span class="stat-n" id="s-errors">0</span><span class="stat-l">errors</span></span>
+  </button>
+  <button class="stat is-drift" type="button" data-tile="drift" aria-pressed="false" title="digest moved since the previous scan">
+    <span class="nf" aria-hidden="true">&#xf1b8;</span>
+    <span class="stat-body"><span class="stat-n" id="s-drift">0</span><span class="stat-l">drift</span></span>
+  </button>
+  <button class="stat is-ok" type="button" data-tile="current" aria-pressed="false" title="nothing to do">
+    <span class="nf" aria-hidden="true">&#xf00c;</span>
+    <span class="stat-body"><span class="stat-n" id="s-ok">0</span><span class="stat-l">current</span></span>
+  </button>
+</section>
 
-<main class="page">
-  <div id="scan-error" class="scan-error hidden">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
-      <line x1="12" y1="9" x2="12" y2="13"/>
-      <line x1="12" y1="17" x2="12.01" y2="17"/>
-    </svg>
-    <span id="scan-error-text"></span>
-  </div>
+<div class="banner hidden" id="scan-error">
+  <span class="nf" aria-hidden="true">&#xf071;</span>
+  <span id="scan-error-text"></span>
+</div>
 
-  <div class="stats">
-    <div class="stat-card">
-      <div class="stat-label">Total charts</div>
-      <div class="stat-value" id="s-total">-</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Updates available</div>
-      <div class="stat-value c-yellow" id="s-updates">-</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Up to date</div>
-      <div class="stat-value c-green" id="s-ok">-</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Sources</div>
-      <div class="stat-value" id="s-sources">-</div>
-    </div>
-  </div>
+<main id="groups"></main>
 
-  <div class="card">
-    <div class="toolbar">
-      <span class="scan-meta">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-        </svg>
-        <span id="last-scan">Not yet scanned</span>
-      </span>
-      <span class="toolbar-spacer"></span>
-      <input class="search" type="text" id="q" placeholder="Filter..." oninput="render()">
-      <select class="filter-sel" id="f-type" onchange="render()">
-        <option value="">All types</option>
-        <option value="helm">Helm</option>
-        <option value="fluxcd">FluxCD</option>
-      </select>
-      <select class="filter-sel" id="f-scope" onchange="render()">
-        <option value="">All scopes</option>
-        <option value="major">Major</option>
-        <option value="minor">Minor</option>
-        <option value="patch">Patch</option>
-        <option value="unknown">Unknown</option>
-      </select>
-      <select class="filter-sel" id="f-upd" onchange="render()">
-        <option value="">All</option>
-        <option value="1">Updates only</option>
-        <option value="0">Up to date</option>
-        <option value="err">Check errors</option>
-      </select>
-    </div>
+<footer class="page-foot">
+  <span><span class="nf" aria-hidden="true">&#xf017;</span>checked <span id="foot-checked">—</span></span>
+  <span><span class="nf" aria-hidden="true">&#xf021;</span>auto-refresh <span id="foot-refresh">—</span></span>
+  <span><span class="nf" aria-hidden="true">&#xf121;</span>update-checker <span id="foot-version">—</span></span>
+</footer>
 
-    <div class="tbl-wrap">
-      <table>
-        <thead>
-          <tr id="thead-row">
-            <th data-col="source">Source</th>
-            <th data-col="chart">Chart</th>
-            <th data-col="dependency">Dependency</th>
-            <th data-col="type">Type</th>
-            <th data-col="protocol">Protocol</th>
-            <th data-col="current_version">Current</th>
-            <th data-col="latest_version">Latest</th>
-            <th data-col="scope">Scope</th>
-          </tr>
-        </thead>
-        <tbody id="tbody"></tbody>
-      </table>
-    </div>
-  </div>
-</main>
+<div class="toasts" id="toasts" aria-live="polite"></div>
 
-<div id="toasts"></div>
-
-<script>
-'use strict';
-
-let results = [];
-let sortCol = 'source';
-let sortAsc = true;
-let pollTimer = null;
-let triggerAvailable = false;
-
-async function init() {
-  await checkStatus();
-  await loadResults();
-}
-
-async function checkStatus() {
-  try {
-    const st = await api('/api/status');
-    triggerAvailable = st.trigger_available === true;
-
-    if (st.version) {
-      document.getElementById('version-text').textContent = st.version;
-    }
-
-    if (triggerAvailable) {
-      document.getElementById('scan-btn').classList.remove('hidden');
-    }
-
-    if (st.scanning) {
-      setScanning(true);
-      startPoll();
-    }
-
-    if (st.last_scan_at) {
-      setLastScan(st.last_scan_at);
-    }
-
-    setScanError(st.last_error);
-  } catch (_) {}
-}
-
-async function loadResults() {
-  try {
-    results = await api('/api/results') || [];
-    updateStats();
-    render();
-  } catch (_) {}
-}
-
-async function triggerScan() {
-  if (!triggerAvailable) return;
-
-  document.getElementById('scan-btn').disabled = true;
-  setScanning(true);
-
-  try {
-    await api('/api/scan/trigger', 'POST');
-    toast('Scan triggered', 'ok');
-    startPoll();
-  } catch (e) {
-    if (e.message === '409') {
-      toast('Scan already in progress', 'ok');
-      startPoll();
-    } else {
-      toast('Failed to trigger scan', 'err');
-      setScanning(false);
-      document.getElementById('scan-btn').disabled = false;
-    }
-  }
-}
-
-function startPoll() {
-  if (pollTimer) return;
-  pollTimer = setInterval(async () => {
-    try {
-      const st = await api('/api/status');
-      if (!st.scanning) {
-        clearInterval(pollTimer);
-        pollTimer = null;
-        setScanning(false);
-        document.getElementById('scan-btn').disabled = false;
-        if (st.last_scan_at) setLastScan(st.last_scan_at);
-        setScanError(st.last_error);
-        await loadResults();
-        toast('Scan complete — ' + st.result_count + ' results', 'ok');
-      }
-    } catch (_) {}
-  }, 3000);
-}
-
-function setScanning(on) {
-  const chip = document.getElementById('status-chip');
-  const txt  = document.getElementById('status-text');
-  chip.className = 'chip ' + (on ? 'scanning' : 'idle');
-  txt.textContent = on ? 'Scanning...' : 'Ready';
-}
-
-function setLastScan(iso) {
-  if (!iso) return;
-  document.getElementById('last-scan').textContent = 'Last scan: ' + new Date(iso).toLocaleString();
-}
-
-function setScanError(err) {
-  const el  = document.getElementById('scan-error');
-  const txt = document.getElementById('scan-error-text');
-  if (err) {
-    txt.textContent = 'Last scan error: ' + err;
-    el.classList.remove('hidden');
-  } else {
-    el.classList.add('hidden');
-  }
-}
-
-function updateStats() {
-  const total   = results.length;
-  const updates = results.filter(r => r.update_available).length;
-  const errors  = results.filter(r => r.check_error).length;
-  document.getElementById('s-total').textContent   = total   || '-';
-  document.getElementById('s-updates').textContent = updates || '-';
-  document.getElementById('s-ok').textContent      = (total - updates - errors) || '-';
-  document.getElementById('s-sources').textContent = new Set(results.map(r => r.source)).size || '-';
-}
-
-document.getElementById('thead-row').addEventListener('click', e => {
-  const th = e.target.closest('th[data-col]');
-  if (!th) return;
-  const col = th.dataset.col;
-  if (sortCol === col) sortAsc = !sortAsc;
-  else { sortCol = col; sortAsc = true; }
-  render();
-});
-
-function render() {
-  const q   = document.getElementById('q').value.toLowerCase();
-  const ft  = document.getElementById('f-type').value;
-  const fs  = document.getElementById('f-scope').value;
-  const fu  = document.getElementById('f-upd').value;
-
-  let rows = results.filter(r => {
-    if (ft && r.type !== ft) return false;
-    if (fs && r.scope !== fs) return false;
-    if (fu === '1' && !r.update_available) return false;
-    if (fu === '0' && (r.update_available || r.check_error)) return false;
-    if (fu === 'err' && !r.check_error) return false;
-    if (q) {
-      const blob = [r.source, r.chart, r.dependency, r.current_version, r.latest_version].join(' ').toLowerCase();
-      if (!blob.includes(q)) return false;
-    }
-    return true;
-  });
-
-  rows.sort((a, b) => {
-    const av = String(a[sortCol] ?? '').toLowerCase();
-    const bv = String(b[sortCol] ?? '').toLowerCase();
-    return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
-  });
-
-  const tbody = document.getElementById('tbody');
-
-  if (rows.length === 0) {
-    const msg = results.length === 0
-      ? ['No results yet', triggerAvailable ? 'Click Scan to check for updates' : 'Waiting for scanner']
-      : ['No matching results', 'Try adjusting filters'];
-    tbody.innerHTML = `<tr><td colspan="8"><div class="empty"><div class="empty-title">${msg[0]}</div><div>${msg[1]}</div></div></td></tr>`;
-    return;
-  }
-
-  tbody.innerHTML = rows.map(r => {
-    const upd    = r.update_available;
-    let latest;
-    if (r.check_error) {
-      latest = `<span class="v-err" title="${esc(r.check_error)}">check failed</span>`;
-    } else if (r.latest_version) {
-      latest = `<span class="${upd ? 'v-update' : 'v-latest'}">${esc(r.latest_version)}</span>`;
-    } else {
-      latest = `<span class="v-na">-</span>`;
-    }
-
-    return `<tr class="${upd ? 'has-update' : ''}">
-      <td>${esc(r.source)}</td>
-      <td>${esc(r.chart)}</td>
-      <td class="mono">${esc(r.dependency)}</td>
-      <td><span class="badge badge-${r.type}">${esc(r.type)}</span></td>
-      <td><span class="badge badge-${r.protocol}">${esc(r.protocol)}</span></td>
-      <td class="mono v-current">${esc(r.current_version)}</td>
-      <td class="mono">${latest}</td>
-      <td>${esc(r.scope || '')}</td>
-    </tr>`;
-  }).join('');
-}
-
-function toast(msg, type) {
-  const el = document.createElement('div');
-  el.className = 'toast ' + type;
-  el.textContent = msg;
-  document.getElementById('toasts').appendChild(el);
-  setTimeout(() => el.remove(), 4000);
-}
-
-function esc(s) {
-  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-
-async function api(url, method) {
-  const res = await fetch(url, method ? { method } : undefined);
-  if (!res.ok) throw new Error(res.status);
-  return res.json();
-}
-
-init();
-</script>
+<script src="/assets/app.js"></script>
 </body>
 </html>

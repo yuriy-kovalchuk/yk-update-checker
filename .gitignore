@@ -36,3 +36,5 @@ data/
 test-repo/
 update-checker-api-*
 yk-update-checker-*
+docs/audit-*.md
+docs/plan-*.md

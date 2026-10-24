@@ -6,27 +6,62 @@ on:
   pull_request:
     types: [opened, synchronize]
 
+# Only the publishing job holds packages:write; a PR run builds untrusted content.
 permissions:
   contents: read
-  packages: write       # push images to GHCR
-  pull-requests: write   # comment image reference on PRs
 
 env:
   REGISTRY: ghcr.io
   IMAGE: ghcr.io/${{ github.repository_owner }}/yk-update-checker
 
 jobs:
-  build-dev:
-    name: Build & push dev image
+  # ── Pull request: prove the image builds, publish nothing ─────────────────
+  build-pr:
+    name: Build PR image (no publish)
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Capture build date
+        id: date
+        run: echo "date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+
+      # Both platforms compiled, nothing pushed; cacheonly keeps the layer cache warm.
+      - name: Build (no export)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: false
+          platforms: linux/amd64,linux/arm64
+          outputs: type=cacheonly
+          tags: yk-update-checker:pr-${{ github.event.pull_request.number }}
+          build-args: |
+            VERSION=pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+            COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ steps.date.outputs.date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Master: publish :dev + :sha-<short> ───────────────────────────────────
+  build-master:
+    name: Publish dev image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write      # the only job allowed to write to GHCR
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -36,10 +71,8 @@ jobs:
         id: date
         run: echo "date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
 
-      # ── Master branch: :dev + :sha-<short> ──────────────────────
-      - name: Build and push (master)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-        uses: docker/build-push-action@v7
+      - name: Build and push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           push: true
@@ -53,31 +86,3 @@ jobs:
             BUILD_DATE=${{ steps.date.outputs.date }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      # ── PR branch: :pr-<number>-<short_sha> ─────────────────────
-      - name: Build and push (PR)
-        if: github.event_name == 'pull_request'
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ env.IMAGE }}:pr-${{ github.event.pull_request.number }}-${{ github.sha }}
-          build-args: |
-            VERSION=pr-${{ github.event.pull_request.number }}-${{ github.sha }}
-            COMMIT=${{ github.sha }}
-            BUILD_DATE=${{ steps.date.outputs.date }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Comment image reference on PR
-        if: github.event_name == 'pull_request' && github.event.action != 'closed'
-        uses: marocchino/sticky-pull-request-comment@v2
-        with:
-          header: dev-image
-          message: |
-            ## Dev image for this PR
-
-            ```bash
-            docker pull ${{ env.IMAGE }}:pr-${{ github.event.pull_request.number }}-${{ github.sha }}
-            ```

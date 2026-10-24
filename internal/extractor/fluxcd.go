@@ -2,12 +2,7 @@ package extractor
 
 import (
 	"bytes"
-	"errors"
-	"io"
-	"log/slog"
 	"sync"
-
-	"gopkg.in/yaml.v3"
 )
 
 // objectMeta mirrors the Kubernetes ObjectMeta fields we care about.
@@ -31,7 +26,16 @@ type fluxSourceSpec struct {
 
 // fluxOCIRef is the spec.ref block of an OCIRepository.
 type fluxOCIRef struct {
-	Tag string `yaml:"tag"`
+	Tag    string `yaml:"tag"`
+	SemVer string `yaml:"semver"`
+}
+
+// version is what the OCIRepository is pinned to, in Flux's own precedence.
+func (r fluxOCIRef) version() string {
+	if r.SemVer != "" {
+		return r.SemVer
+	}
+	return r.Tag
 }
 
 // fluxSourceResource parses HelmRepository and OCIRepository manifests during Prepare.
@@ -71,10 +75,10 @@ type repoEntry struct {
 	protocol  string
 	repoURL   string // bare URL, scheme stripped
 	chartName string // derived from OCI URL last segment; empty for HTTPS
-	version   string // pinned version from OCIRepository spec.ref.tag
+	version   string // pinned version from OCIRepository spec.ref (semver range or tag)
 }
 
-// FluxCD extracts chart refs from HelmRelease manifests via a two-pass prepare+extract pattern (PrepareFile collects HelmRepository/OCIRepository sources; Extract resolves HelmRelease refs against them).
+// FluxCD resolves HelmRelease chart refs: PrepareFile collects sources, Extract resolves the releases against them.
 type FluxCD struct {
 	mu   sync.RWMutex
 	helm map[string]repoEntry // keyed by "namespace/name"
@@ -93,31 +97,21 @@ func NewFluxCD() *FluxCD {
 func (*FluxCD) Type() string { return "fluxcd" }
 
 // Match reports whether the file contains a HelmRelease resource.
-func (*FluxCD) Match(_ string, content []byte) bool {
-	return bytes.Contains(content, []byte("HelmRelease"))
+func (*FluxCD) Match(f *File) bool {
+	return bytes.Contains(f.Content, []byte("HelmRelease"))
 }
 
 // PrepareFile collects HelmRepository/OCIRepository resources for cross-file HelmRelease sourceRef/chartRef resolution.
-func (f *FluxCD) PrepareFile(_ string, content []byte) error {
-	if !bytes.Contains(content, []byte("HelmRepository")) &&
-		!bytes.Contains(content, []byte("OCIRepository")) {
+func (f *FluxCD) PrepareFile(file *File) error {
+	if !bytes.Contains(file.Content, []byte("HelmRepository")) &&
+		!bytes.Contains(file.Content, []byte("OCIRepository")) {
 		return nil
 	}
-
-	dec := yaml.NewDecoder(bytes.NewReader(content))
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	for {
-		var doc fluxSourceResource
-		if err := dec.Decode(&doc); err != nil {
-			if keepDecoding(err, "fluxcd prepare") {
-				continue
-			}
-			break
-		}
-
+	for _, doc := range decodeAll[fluxSourceResource](file) {
 		key := doc.Metadata.Namespace + "/" + doc.Metadata.Name
 
 		switch doc.Kind {
@@ -132,7 +126,7 @@ func (f *FluxCD) PrepareFile(_ string, content []byte) error {
 				protocol:  protocol,
 				repoURL:   repo,
 				chartName: chart,
-				version:   doc.Spec.Ref.Tag,
+				version:   doc.Spec.Ref.version(),
 			}
 		}
 	}
@@ -141,17 +135,9 @@ func (f *FluxCD) PrepareFile(_ string, content []byte) error {
 }
 
 // Extract returns chart refs from all HelmRelease documents in content via three patterns: inline repoURL, sourceRef→HelmRepository, chartRef→OCIRepository.
-func (f *FluxCD) Extract(_ string, content []byte) (string, []ChartRef, error) {
-	dec := yaml.NewDecoder(bytes.NewReader(content))
-	var all []ChartRef
-	for {
-		var hr helmReleaseResource
-		if err := dec.Decode(&hr); err != nil {
-			if keepDecoding(err, "fluxcd extract") {
-				continue
-			}
-			break
-		}
+func (f *FluxCD) Extract(file *File) (string, []Ref, error) {
+	var all []Ref
+	for _, hr := range decodeAll[helmReleaseResource](file) {
 		if hr.Metadata.Name == "" {
 			continue // not a HelmRelease (or an empty document)
 		}
@@ -160,87 +146,64 @@ func (f *FluxCD) Extract(_ string, content []byte) (string, []ChartRef, error) {
 	return "", all, nil
 }
 
-// keepDecoding reports whether a multi-document decode loop can continue past
-// err. Type mismatches (e.g. a Flux HelmChart whose spec.chart is a string)
-// consume their document, so later documents in the file must still be read;
-// syntax errors and io.EOF end the file.
-func keepDecoding(err error, op string) bool {
-	var typeErr *yaml.TypeError
-	if errors.As(err, &typeErr) {
-		slog.Warn("skipping malformed YAML document", "op", op, "error", err)
-		return true
+// source resolves a release's cross-namespace reference among the sources collected during Prepare; the namespace defaults to the release's own.
+func (f *FluxCD) source(store map[string]repoEntry, ref *crossNamespaceRef, releaseNS string) (repoEntry, bool) {
+	ns := ref.Namespace
+	if ns == "" {
+		ns = releaseNS
 	}
-	if !errors.Is(err, io.EOF) {
-		slog.Warn("stopping YAML parse", "op", op, "error", err)
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if entry, ok := store[ns+"/"+ref.Name]; ok {
+		return entry, true
 	}
-	return false
+	entry, ok := store["/"+ref.Name]
+	return entry, ok
 }
 
-// refsFromRelease extracts ChartRefs from a single HelmRelease document.
-func (f *FluxCD) refsFromRelease(hr helmReleaseResource) []ChartRef {
+// refsFromRelease extracts Refs from a single HelmRelease document.
+func (f *FluxCD) refsFromRelease(hr helmReleaseResource) []Ref {
 	releaseName := hr.Metadata.Name
-	releaseNS := hr.Metadata.Namespace
 
 	// Pattern 3: chartRef → OCIRepository
 	if cr := hr.Spec.ChartRef; cr != nil && cr.Kind == "OCIRepository" {
-		ns := cr.Namespace
-		if ns == "" {
-			ns = releaseNS
-		}
-		key := ns + "/" + cr.Name
-
-		f.mu.RLock()
-		entry, ok := f.oci[key]
-		f.mu.RUnlock()
-
-		if !ok || entry.chartName == "" || entry.version == "" {
+		entry, ok := f.source(f.oci, cr, hr.Metadata.Namespace)
+		if !ok {
 			return nil
 		}
-		return []ChartRef{{
-			Name:           entry.chartName,
-			Chart:          releaseName,
-			Protocol:       entry.protocol,
-			Repository:     entry.repoURL,
-			CurrentVersion: entry.version,
-		}}
+		return releaseRef(releaseName, entry.chartName, entry.version, entry)
 	}
 
 	cs := hr.Spec.Chart.Spec
 
 	// Pattern 2: sourceRef → HelmRepository
 	if sr := cs.SourceRef; sr != nil && sr.Kind == "HelmRepository" {
-		ns := sr.Namespace
-		if ns == "" {
-			ns = releaseNS
-		}
-		key := ns + "/" + sr.Name
-
-		f.mu.RLock()
-		entry, ok := f.helm[key]
-		f.mu.RUnlock()
-
-		if !ok || cs.Chart == "" || cs.Version == "" {
+		entry, ok := f.source(f.helm, sr, hr.Metadata.Namespace)
+		if !ok {
 			return nil
 		}
-		return []ChartRef{{
-			Name:           cs.Chart,
-			Chart:          releaseName,
-			Protocol:       entry.protocol,
-			Repository:     entry.repoURL,
-			CurrentVersion: cs.Version,
-		}}
+		return releaseRef(releaseName, cs.Chart, cs.Version, entry)
 	}
 
 	// Pattern 1: inline repoURL
-	if cs.RepoURL == "" || cs.Chart == "" || cs.Version == "" {
+	if cs.RepoURL == "" {
 		return nil
 	}
 	protocol, repo := ParseProtocol(cs.RepoURL)
-	return []ChartRef{{
-		Name:           cs.Chart,
-		Chart:          releaseName,
-		Protocol:       protocol,
-		Repository:     repo,
-		CurrentVersion: cs.Version,
+	return releaseRef(releaseName, cs.Chart, cs.Version, repoEntry{protocol: protocol, repoURL: repo})
+}
+
+// releaseRef is the one Ref a HelmRelease yields, or none when the chart or its version is unknown (a digest-only OCIRepository, an unpinned chart).
+func releaseRef(release, chart, version string, src repoEntry) []Ref {
+	if chart == "" || version == "" {
+		return nil
+	}
+	return []Ref{{
+		Name:           chart,
+		Chart:          release,
+		Protocol:       src.protocol,
+		Repository:     src.repoURL,
+		CurrentVersion: version,
+		Kind:           "HelmRelease",
 	}}
 }

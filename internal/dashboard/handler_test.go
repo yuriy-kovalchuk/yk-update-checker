@@ -1,48 +1,47 @@
 package dashboard
 
 import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/yuriy-kovalchuk/yk-update-checker/internal/errkind"
+	"github.com/yuriy-kovalchuk/yk-update-checker/internal/report"
 	"github.com/yuriy-kovalchuk/yk-update-checker/internal/scan"
 	"github.com/yuriy-kovalchuk/yk-update-checker/internal/trigger"
 )
 
-// stubService is a minimal scan.Service for dashboard handler tests.
-type stubService struct {
-	results    []scan.Result
-	resultsErr error
-	status     scan.Status
+type fakeTrigger struct {
+	available, running bool
+	err                error
 }
 
-func (s *stubService) RunScan(context.Context) error { return nil }
-func (s *stubService) StoreResults(context.Context, []scan.Result, time.Time, string, time.Duration) error {
-	return nil
-}
-func (s *stubService) GetResults(context.Context) ([]scan.Result, error) {
-	return s.results, s.resultsErr
-}
-func (s *stubService) GetStatus(context.Context) scan.Status { return s.status }
-func (s *stubService) Trigger(context.Context) error         { return nil }
-func (s *stubService) SetTrigger(trigger.Trigger)            {}
-func (s *stubService) SetMeter(scan.MetricsCallback)         {}
+func (f fakeTrigger) Trigger(context.Context) error { return f.err }
+func (f fakeTrigger) Available() bool               { return f.available }
+func (f fakeTrigger) Running(context.Context) bool  { return f.running }
 
-var errTest = errors.New("test error")
-
-func newTestMux(svc scan.Service) *http.ServeMux {
+func newTestMux(snap report.Snapshot, trig fakeTrigger) *http.ServeMux {
 	mux := http.NewServeMux()
-	NewHandler(svc).RegisterRoutes(mux)
+	(&Handler{Snapshot: func() report.Snapshot { return snap }, Trigger: trig}).RegisterRoutes(mux)
 	return mux
 }
 
+func get(mux *http.ServeMux, method, path string) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequestWithContext(context.Background(), method, path, nil))
+	return w
+}
+
 func TestUIServesEmbeddedHTML(t *testing.T) {
-	mux := newTestMux(&stubService{})
+	mux := newTestMux(report.Snapshot{}, fakeTrigger{})
 
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil))
@@ -59,7 +58,7 @@ func TestUIServesEmbeddedHTML(t *testing.T) {
 }
 
 func TestFaviconServesSVG(t *testing.T) {
-	mux := newTestMux(&stubService{})
+	mux := newTestMux(report.Snapshot{}, fakeTrigger{})
 
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/favicon.svg", nil))
@@ -75,85 +74,123 @@ func TestFaviconServesSVG(t *testing.T) {
 	}
 }
 
+func TestStaticAssetsServed(t *testing.T) {
+	// The page links these by path; if the embed or a route breaks, the UI is a blank page.
+	cases := []struct {
+		path        string
+		contentType string
+	}{
+		{"/assets/app.css", "text/css"},
+		{"/assets/app.js", "text/javascript"},
+		{"/fonts/JetBrainsMonoNF-Regular.woff2", "font/woff2"},
+	}
+	mux := newTestMux(report.Snapshot{}, fakeTrigger{})
+
+	for _, tc := range cases {
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequestWithContext(context.Background(), http.MethodGet, tc.path, nil))
+
+		if w.Code != http.StatusOK {
+			t.Errorf("%s status = %d, want %d", tc.path, w.Code, http.StatusOK)
+			continue
+		}
+		if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, tc.contentType) {
+			t.Errorf("%s Content-Type = %q, want %q prefix", tc.path, ct, tc.contentType)
+			continue
+		}
+		if w.Body.Len() == 0 {
+			t.Errorf("%s body is empty", tc.path)
+			continue
+		}
+		if cc := w.Header().Get("Cache-Control"); cc == "" {
+			t.Errorf("%s has no Cache-Control", tc.path)
+			continue
+		}
+
+		if tc.path == "/assets/app.css" {
+			ui := httptest.NewRecorder()
+			mux.ServeHTTP(ui, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil))
+			if !strings.Contains(ui.Body.String(), `href="/assets/app.css"`) {
+				t.Error("embedded UI does not link /assets/app.css")
+			}
+		}
+	}
+}
+
 func TestResultsReturnsJSON(t *testing.T) {
-	results := []scan.Result{{
-		Source:          "homelab",
-		Chart:           "app",
-		Dependency:      "podinfo",
-		CurrentVersion:  "1.0.0",
-		LatestVersion:   "2.0.0",
-		UpdateAvailable: true,
-	}}
-	mux := newTestMux(&stubService{results: results})
-
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/results", nil))
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
-	}
-	if ct := w.Header().Get("Content-Type"); ct != "application/json" {
-		t.Errorf("Content-Type = %q, want application/json", ct)
-	}
-
+	snap := report.Snapshot{Deps: []report.Dependency{{Status: report.DepStatus{Result: scan.Result{
+		Source: "homelab", Dependency: "podinfo", CurrentVersion: "1.0.0", LatestVersion: "2.0.0", UpdateAvailable: true}}}}}
+	w := get(newTestMux(snap, fakeTrigger{}), http.MethodGet, "/api/results")
 	var got []scan.Result
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(got) != 1 || got[0].Dependency != "podinfo" || !got[0].UpdateAvailable {
-		t.Errorf("decoded results = %+v, want the stub result", got)
+	if w.Code != http.StatusOK || len(got) != 1 || got[0].Dependency != "podinfo" || !got[0].UpdateAvailable {
+		t.Errorf("status %d, results %+v; want the stored dependency", w.Code, got)
 	}
 }
 
 func TestResultsEmptyIsJSONArray(t *testing.T) {
 	// The UI relies on [] (not null) for an empty result set.
-	mux := newTestMux(&stubService{results: []scan.Result{}})
-
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/results", nil))
-
-	if body := strings.TrimSpace(w.Body.String()); body != "[]" {
+	if body := strings.TrimSpace(get(newTestMux(report.Snapshot{}, fakeTrigger{}), http.MethodGet, "/api/results").Body.String()); body != "[]" {
 		t.Errorf("body = %q, want []", body)
 	}
 }
 
-func TestResultsErrorReturns500(t *testing.T) {
-	mux := newTestMux(&stubService{resultsErr: errTest})
-
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/results", nil))
-
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("status = %d, want %d", w.Code, http.StatusInternalServerError)
+func TestStatusSummarizesRepositories(t *testing.T) {
+	older, newer := metav1.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), metav1.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	snap := report.Snapshot{
+		Repos: []report.RepositoryScan{
+			{Status: report.RepoStatus{Repo: "ok", LastScanTime: older, Phase: report.PhaseSucceeded}},
+			{Status: report.RepoStatus{Repo: "bad", LastScanTime: newer, Phase: report.PhaseFailed,
+				Error: &report.ErrorInfo{Kind: errkind.Auth, Message: "denied"}}},
+		},
+		Deps: make([]report.Dependency, 3),
+	}
+	var got Status
+	if err := json.Unmarshal(get(newTestMux(snap, fakeTrigger{available: true, running: true}), http.MethodGet, "/api/status").Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Scanning || !got.TriggerAvailable || got.ResultCount != 3 || got.LastScanAt == nil || !got.LastScanAt.Equal(newer.Time) {
+		t.Errorf("status = %+v, want scanning, 3 results, last scan %v", got, newer)
+	}
+	if got.LastErrorKind != errkind.Auth || len(got.RepoErrors) != 1 || got.RepoErrors[0].Repo != "bad" {
+		t.Errorf("errors = %q %+v, want bad/auth", got.LastErrorKind, got.RepoErrors)
 	}
 }
 
-func TestStatusReturnsJSON(t *testing.T) {
-	scannedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	svc := &stubService{status: scan.Status{
-		Scanning:         false,
-		TriggerAvailable: true,
-		LastScanAt:       &scannedAt,
-		ResultCount:      7,
-		Version:          "test",
-	}}
-	mux := newTestMux(svc)
-
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/status", nil))
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+func TestTriggerResponses(t *testing.T) {
+	cases := []struct {
+		trig fakeTrigger
+		want int
+	}{
+		{fakeTrigger{available: true}, http.StatusAccepted},
+		{fakeTrigger{available: true, err: trigger.ErrAlreadyRunning}, http.StatusConflict},
+		{fakeTrigger{}, http.StatusServiceUnavailable},
+		{fakeTrigger{available: true, err: errors.New("boom")}, http.StatusInternalServerError},
 	}
+	for _, tc := range cases {
+		if got := get(newTestMux(report.Snapshot{}, tc.trig), http.MethodPost, "/api/scan/trigger").Code; got != tc.want {
+			t.Errorf("%+v: status %d, want %d", tc.trig, got, tc.want)
+		}
+	}
+}
 
-	var got scan.Status
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+// TestDashboardKnowsEveryErrorKind keeps app.js ERROR_KINDS in step with internal/errkind.
+func TestDashboardKnowsEveryErrorKind(t *testing.T) {
+	js, err := fs.ReadFile(uiFS, "ui/app.js")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !got.TriggerAvailable || got.ResultCount != 7 || got.Version != "test" {
-		t.Errorf("decoded status = %+v, want the stub status", got)
+	start := strings.Index(string(js), "const ERROR_KINDS = {")
+	if start < 0 {
+		t.Fatal("ERROR_KINDS table not found in app.js")
 	}
-	if got.LastScanAt == nil || !got.LastScanAt.Equal(scannedAt) {
-		t.Errorf("LastScanAt = %v, want %v", got.LastScanAt, scannedAt)
+	table := string(js)[start:]
+	table = table[:strings.Index(table, "};")]
+	for _, k := range errkind.All {
+		if !strings.Contains(table, "\n  "+string(k)+": [") {
+			t.Errorf("app.js ERROR_KINDS has no entry for %q", k)
+		}
 	}
 }

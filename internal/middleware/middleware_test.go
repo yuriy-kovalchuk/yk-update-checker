@@ -53,6 +53,24 @@ func TestHeadersSetsSecurityHeaders(t *testing.T) {
 	if got := w.Header().Get("X-Frame-Options"); got != "DENY" {
 		t.Errorf("X-Frame-Options = %q, want %q", got, "DENY")
 	}
+	if got := w.Header().Get("Referrer-Policy"); got != "no-referrer" {
+		t.Errorf("Referrer-Policy = %q, want no-referrer", got)
+	}
+	// S6: the dashboard has no inline handlers and no external origins, so the policy stays default-deny; a relaxation would be a regression.
+	csp := w.Header().Get("Content-Security-Policy")
+	for _, directive := range []string{
+		"default-src 'self'", "script-src 'self'", "style-src 'self'",
+		"connect-src 'self'", "frame-ancestors 'none'", "object-src 'none'",
+	} {
+		if !strings.Contains(csp, directive) {
+			t.Errorf("Content-Security-Policy %q is missing %q", csp, directive)
+		}
+	}
+	for _, unsafe := range []string{"'unsafe-inline'", "'unsafe-eval'", "*"} {
+		if strings.Contains(csp, unsafe) {
+			t.Errorf("Content-Security-Policy %q must not contain %q", csp, unsafe)
+		}
+	}
 }
 
 func TestLoggerLogsRequest(t *testing.T) {
@@ -102,4 +120,27 @@ func TestChainAppliesFirstMiddlewareOutermost(t *testing.T) {
 	if !slices.Equal(order, []string{"A", "B", "inner"}) {
 		t.Errorf("middleware order = %v, want [A B inner]", order)
 	}
+}
+
+func TestRecoveryDoesNotRewriteAStartedResponse(t *testing.T) {
+	h := Recovery(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("partial"))
+		panic("boom")
+	}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != "partial" {
+		t.Errorf("got %d %q, want the started 200 response left alone", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRecoveryReraisesErrAbortHandler(t *testing.T) {
+	h := Recovery(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic(http.ErrAbortHandler) }))
+	defer func() {
+		if rec := recover(); rec != http.ErrAbortHandler { //nolint:errorlint // sentinel compared as panicked
+			t.Errorf("recovered %v, want http.ErrAbortHandler re-raised", rec)
+		}
+	}()
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil))
 }

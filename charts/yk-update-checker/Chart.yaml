@@ -1,18 +1,26 @@
 apiVersion: v2
 name: yk-update-checker
-description: Scans Helm and FluxCD GitOps repositories for chart updates and exposes results via a Material Design web UI.
+description: Scans GitOps repositories for outdated Helm chart dependencies, FluxCD HelmReleases and pinned container images, and serves a web dashboard.
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+# Versioning policy (enforced by .github/workflows/cd.yaml on tag push):
+#   appVersion — the update-checker release this chart's defaults target; always equals the
+#                release tag without the "v" (deployment.yaml falls back to it for image.tag).
+#   version    — the chart's own semver. Kept in lockstep with appVersion; a chart-only fix
+#                (no image change) may bump version on its own.
+# Between releases these hold the last released values. A release-prep commit bumps both to the
+# new version and converts CHANGELOG.md [Unreleased] into a dated section; pushing the tag then
+# publishes what is in this file, and CI fails the release if they do not match the tag.
+version: 0.3.0
+appVersion: "0.3.0"
 keywords:
   - helm
   - fluxcd
   - update-checker
   - gitops
   - homelab
-home: https://github.com/yuriy-kovalchuk/yk-helm-update-checker
+home: https://github.com/yuriy-kovalchuk/yk-update-checker
 sources:
-  - https://github.com/yuriy-kovalchuk/yk-helm-update-checker
+  - https://github.com/yuriy-kovalchuk/yk-update-checker
 maintainers:
   - name: yuriy kovalchuk
     email: yuriykovalchuk1992@icloud.com

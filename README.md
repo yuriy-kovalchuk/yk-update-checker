@@ -1,19 +1,31 @@
 # yk-update-checker
 
-Scans one or more GitOps repositories for outdated Helm chart dependencies and FluxCD HelmRelease resources, then surfaces results in a web UI.
+Finds outdated dependencies in your GitOps repositories: Helm chart dependencies, FluxCD
+`HelmRelease` charts, container images in Kubernetes manifests and `FROM` lines in Dockerfiles.
+Results show up in a web UI, as Prometheus metrics and alerts, and as Kubernetes resources.
 
-## Installation
+## How it works
 
-```bash
-helm install yk-update-checker \
-  oci://ghcr.io/yuriy-kovalchuk/charts/yk-update-checker \
-  --version <version> \
-  -f values.yaml
+```mermaid
+flowchart LR
+    scan["scanner<br/>(CronJob)"] -->|writes| reports[("reports<br/>RepositoryScan + Dependency")]
+    reports -->|reads| dash["dashboard<br/>UI · API · /metrics"]
+    dash -->|"starts a scan (Job)"| scan
 ```
 
-## Quickstart
+- The **scanner** runs on a schedule: it clones each repository, checks every reference against its
+  registry and writes one `RepositoryScan` per repository and one `Dependency` per reference.
+- The **dashboard** shows those reports and can start a scan. It never clones anything and holds
+  no credentials.
 
-Minimum `values.yaml` — add at least one repo:
+## Install
+
+```bash
+helm install yk-update-checker oci://ghcr.io/yuriy-kovalchuk/charts/yk-update-checker \
+  --version <version> --namespace yk-update-checker --create-namespace -f values.yaml
+```
+
+Minimal `values.yaml`:
 
 ```yaml
 scanner:
@@ -21,91 +33,94 @@ scanner:
     repos:
       - name: homelab
         repo: https://github.com/example/my-gitops-repo
-        path: kubernetes/apps   # optional sub-path
+        path: kubernetes/apps   # optional
 ```
 
-The chart deploys two workloads:
+Open the UI through an Ingress (`ingress.enabled`) or `kubectl port-forward svc/yk-update-checker 8080:80`.
+The reports are also plain Kubernetes objects:
 
-| Workload | Kind | Role |
-|---|---|---|
-| `update-checker` | Deployment | Serves the UI + API on port 8080, handles manual scan triggers |
-| `update-checker-scanner` | CronJob | One-shot scan pod: clones repos, checks versions, posts results |
+```bash
+kubectl get updatechecker                                                   # both kinds
+kubectl get dependencies -l updatechecker.yuriykovalchuk.dev/outdated=true  # only what is behind
+```
 
-The UI is available at the configured Ingress host or via `kubectl port-forward`.
+Install one release per namespace. The CRDs are cluster-wide, so with several releases in one
+cluster set `crds.install: true` on only one of them.
+
+> **No built-in authentication.** Anyone who can reach the Service can read the results and start
+> scans. Protect it with a NetworkPolicy or an authenticated Ingress; see
+> [Trust model & exposure](docs/architecture.md#trust-model--exposure).
 
 ## Configuration
 
-### Repos
-
 ```yaml
 scanner:
+  schedule: "0 0 * * *"      # when the CronJob scans
+  history:
+    runs: 10                 # past scans kept per repository
   config:
-    update_type: all        # all | major | minor | patch
-    parallel_checks: 5
-
-    repos:
-      - name: my-gitops
-        repo: https://github.com/example/my-gitops-repo
-        path: kubernetes/apps
+    update_type: all         # all | minor | patch
+    scan_timeout: 30m
+    check_images: true       # images in Kubernetes manifests
+    check_dockerfiles: true  # FROM lines in Dockerfiles
+    repos: []
 ```
+
+Every value is documented in [`values.yaml`](charts/yk-update-checker/values.yaml). A config key
+the binary does not know is logged as a warning; a wrong `update_type` or `auth.type` stops the scan.
 
 ### Private repositories
 
-Store credentials in a Kubernetes Secret, then reference it — do not put tokens inline in values:
+Create the Secret yourself and reference it; the chart never holds a token.
 
 ```bash
-kubectl create secret generic github-token \
-  --from-literal=token=ghp_xxxxxxxxxxxxxxxxxxxx
+kubectl create secret generic homelab-github-token --from-literal=token=ghp_xxx
 ```
 
 ```yaml
 scanner:
   config:
     repos:
-      - name: private-repo
-        repo: https://github.com/example/private-repo
+      - name: homelab
+        repo: https://github.com/example/homelab.git
         auth:
-          type: token
-          existingSecret: github-token
-          existingSecretKey: token   # default: token
+          type: token                     # token | basic | ssh
+          existingSecret: homelab-github-token
 ```
 
-Supported auth types: `token`, `basic`, `ssh`. See `examples/config.example.yaml` for all options.
+- Only the scanner mounts the Secret, as a read-only file.
+- `token` and `basic` require an `https://` URL.
+- `ssh` repos also need `scanner.ssh.knownHosts` (the output of `ssh-keyscan`).
+- Private image registries use `scanner.registryAuth.existingSecret`.
 
-### Key values
+Full examples: [`examples/credentials.values.yaml`](examples/credentials.values.yaml) and
+[`examples/private-repo-secrets.yaml`](examples/private-repo-secrets.yaml). Details:
+[Authentication](docs/architecture.md#authentication).
 
-```yaml
-scanner:
-  schedule: "0 0 * * *"     # CronJob schedule (default: daily at 00:00)
-  suspend: false             # suspend the CronJob without deleting it
+### Monitoring
 
-ingress:
-  enabled: false
-  hosts:
-    - host: update-checker.example.com
-      paths:
-        - path: /
-          pathType: Prefix
-
-rbac:
-  create: true               # required for the manual scan trigger button
-```
-
-Full reference: [`charts/yk-update-checker/values.yaml`](charts/yk-update-checker/values.yaml).
+Set `metrics.serviceMonitor.enabled` and `metrics.prometheusRule.enabled` for Prometheus scraping
+and alerts, and `grafana.dashboard.enabled` for the Grafana dashboard. The metrics and alerts are
+listed in [Monitoring & alerting](docs/architecture.md#monitoring--alerting).
 
 ## Development
 
 ```bash
-make build      # compile → bin/update-checker
-make run        # build + serve locally (uses examples/config.yaml)
-make run-scan   # one-shot scan, prints JSON to stdout
-make test       # run tests with race detector
-make help       # list all targets
+make run       # local dashboard on :8080, reports in ./data, scans as child processes
+make test      # tests with the race detector
+make kind      # local kind cluster with the locally built image and chart
+make generate  # regenerate the CRDs after changing the report types
 ```
 
-See [docs/local-testing.md](docs/local-testing.md) for a full local setup guide and [docs/architecture.md](docs/architecture.md) for internals.
+[docs/local-testing.md](docs/local-testing.md) covers local runs, [docs/architecture.md](docs/architecture.md)
+the internals, and [AGENTS.md](AGENTS.md#known-issues) the known issues.
 
-Releases are triggered by pushing a `v*` tag — CI builds the Docker image and Helm chart and publishes both to GHCR.
+### Releasing
+
+1. Set `version` and `appVersion` in `charts/yk-update-checker/Chart.yaml` to the new version.
+2. Rename the `[Unreleased]` section of `CHANGELOG.md` to the new version and date.
+3. Push the tag `vX.Y.Z`. CI publishes the image and chart to GHCR, and refuses a tag that does not
+   match `Chart.yaml`.
 
 ## License
 

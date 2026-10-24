@@ -27,12 +27,17 @@ Port-forward to reach the dashboard locally:
 Then open: http://127.0.0.1:8080
 {{- end }}
 
-To trigger a scan manually from the dashboard, click the "Trigger Scan" button.
+To trigger a scan manually from the dashboard, click "Scan now".
 
 To trigger via kubectl:
   kubectl --namespace {{ .Release.Namespace }} create job \
     --from=cronjob/{{ include "yk-update-checker.fullname" . }}-scanner \
     {{ include "yk-update-checker.fullname" . }}-manual-$(date +%s)
+
+The reports are resources in this namespace, so kubectl reads them without the UI:
+  kubectl --namespace {{ .Release.Namespace }} get repositoryscans
+  kubectl --namespace {{ .Release.Namespace }} get dependencies -l \
+    updatechecker.yuriykovalchuk.dev/outdated=true
 
 {{- if not .Values.scanner.config.repos }}
 

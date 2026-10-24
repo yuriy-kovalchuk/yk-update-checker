@@ -6,10 +6,44 @@ metadata:
   labels:
     {{- include "yk-update-checker.labels" . | nindent 4 }}
 rules:
+  # The manual scan trigger: a Job copied from the scanner CronJob.
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["create", "get", "list"]
   - apiGroups: ["batch"]
     resources: ["cronjobs"]
     verbs: ["get"]
+  # The reports the dashboard renders; it never writes them.
+  - apiGroups: ["updatechecker.yuriykovalchuk.dev"]
+    resources: ["repositoryscans", "dependencies"]
+    verbs: ["get", "list"]
+  # One replica exports the result metrics; create cannot be scoped to one name.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    resourceNames: ["{{ include "yk-update-checker.leaseName" . }}"]
+    verbs: ["get", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "yk-update-checker.scannerServiceAccountName" . }}
+  labels:
+    {{- include "yk-update-checker.labels" . | nindent 4 }}
+    app.kubernetes.io/component: scanner
+rules:
+  # Everything the report writer does and nothing else: this pod clones hostile repository content.
+  - apiGroups: ["updatechecker.yuriykovalchuk.dev"]
+    resources: ["repositoryscans", "dependencies"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  # The scan Lease: one scan at a time, however it was started.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    resourceNames: ["{{ include "yk-update-checker.scanLeaseName" . }}"]
+    verbs: ["get", "update"]
 {{- end }}

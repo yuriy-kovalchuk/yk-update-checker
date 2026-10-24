@@ -1,42 +1,40 @@
-# yk-update-checker scanner configuration
-#
-# This file is read by the scanner (update-checker-scanner).
-# When deploying via Helm, this is generated from chart values — edit values.yaml instead.
+# Scanner config for running the binary directly; with Helm it is generated from values.yaml.
 
-# Maximum upgrade scope to report.
-#   all   – any newer stable release (default)
-#   minor – only minor and patch upgrades within the same major
-#   patch – only patch upgrades within the same major.minor
+# Upgrade scope reported: all (default), minor, patch; "major" behaves exactly like all.
 update_type: all
 
-# Maximum concurrent registry version lookups per scan.
+# Registry lookups per repository; two repositories are scanned at a time, so at most 2 × this run at once.
 parallel_checks: 5
 
-# Optional: persist the git clone cache between runs.
-# Avoids re-cloning repositories on every scan.
-# Mount a PVC at this path and set scanner.gitCacheDir in values.yaml.
-# git_cache_dir: /cache/git
+# Budget for one scan (default 30m, "0" = none); keep the CronJob's activeDeadlineSeconds above it.
+# scan_timeout: 30m
 
-# Optional: how long fetched registry data (Helm indexes, OCI tag lists)
-# is reused between scans by the serve process. Scans that start within this
-# window of a previous one skip re-downloading indexes that were fetched
-# recently. "0" forces a fresh fetch on every scan. Default: 15m.
-# registry_cache_ttl: 15m
+# What gets scanned: workload images and Dockerfile FROM lines (both default true).
+# check_images: true
+# check_dockerfiles: true
+
+# Reject stray candidate tags (backports, fork rebuilds) before reporting (default true).
+# verify_image_tags: true
+
+# Docker config file with registry credentials; only "auths" is read. With Helm use scanner.registryAuth.existingSecret.
+# registry_auth_file: /etc/update-checker-scanner/registry/config.json
+
+# Keep clones between scans; only useful with a persistent volume at this path.
+# git_cache_dir: /cache/git
 
 repos:
   # Public repository — no auth required
   - name: homelab
     repo: https://github.com/example/my-gitops-repo
     path: kubernetes/apps   # optional: scan only this sub-path
+    # Load rejects credentials in the URL, and token/basic auth over anything but https.
 
-  # Private repository — HTTPS token
-  # Via Helm: use auth.existingSecret (generates token_file automatically)
-  # Directly: point token_file at a mounted file, or use token for inline (not recommended)
+  # Private repository, HTTPS token from a file you mount (with Helm: auth.existingSecret).
   - name: private-repo
     repo: https://github.com/example/private-repo
     auth:
       type: token
-      token_file: /etc/update-checker-scanner/secrets/example/private-repo/token
+      token_file: /etc/update-checker-scanner/secrets/private-repo/token
 
   # Private repository — HTTPS basic auth
   - name: gitea-private
@@ -44,11 +42,13 @@ repos:
     auth:
       type: basic
       username: myuser
-      password_file: /etc/update-checker-scanner/secrets/org/repo/password
+      password_file: /etc/update-checker-scanner/secrets/gitea-private/password
 
-  # Private repository — SSH key
+  # Private repository, SSH key (0440 read-only is fine: ssh only checks keys it owns).
   - name: ssh-repo
     repo: git@github.com:example/private-repo.git
     auth:
       type: ssh
-      ssh_key_path: /etc/update-checker-scanner/secrets/example/private-repo/ssh-key
+      ssh_key_path: /etc/update-checker-scanner/secrets/ssh-repo/id_ed25519
+      # Verify host keys (e.g. `ssh-keyscan -t ed25519,rsa github.com`); without it every scan trusts any key.
+      known_hosts_file: /etc/update-checker/known_hosts

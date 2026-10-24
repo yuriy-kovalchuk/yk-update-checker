@@ -1,38 +1,48 @@
 package metrics
 
 import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"testing"
-	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/yuriy-kovalchuk/yk-update-checker/internal/report"
 	"github.com/yuriy-kovalchuk/yk-update-checker/internal/scan"
 )
 
-// testRepo implements scan.Repository for tests.
+// testRepo is a stored scan for tests: its results and when it ran.
 type testRepo struct {
 	results   []scan.Result
-	scannedAt time.Time
+	scannedAt metav1.Time
 }
 
-func (r *testRepo) Save(results []scan.Result, scannedAt time.Time) error {
-	r.results = results
-	r.scannedAt = scannedAt
+// Save replaces the stored scan, as a rescan would.
+func (r *testRepo) Save(results []scan.Result, at metav1.Time) error {
+	r.results, r.scannedAt = results, at
 	return nil
 }
 
-func (r *testRepo) Load() ([]scan.Result, *time.Time, error) {
-	t := r.scannedAt
-	return r.results, &t, nil
+// snap returns the reports a scan of these results would have written.
+func (r *testRepo) snap() report.Snapshot {
+	var s report.Snapshot
+	for _, res := range r.results {
+		s.Deps = append(s.Deps, report.Dependency{Status: report.DepStatus{Result: res}})
+	}
+	if !r.scannedAt.IsZero() {
+		at := r.scannedAt
+		s.Repos = []report.RepositoryScan{{Status: report.RepoStatus{Repo: "gitops", LastSuccessTime: &at}}}
+	}
+	return s
 }
 
 func TestResultCollector_NoResults(t *testing.T) {
 	repo := &testRepo{}
-	collector := NewResultCollector(repo)
+	collector := NewResultCollector(repo.snap, nil)
 
 	reg := mustNewRegistry(t)
-	collector.Register(reg)
+	reg.MustRegister(collector)
 
 	count := testutil.CollectAndCount(reg, "update_checker_dependency_outdated_info")
 	if count != 0 {
@@ -41,7 +51,7 @@ func TestResultCollector_NoResults(t *testing.T) {
 }
 
 func TestResultCollector_FiltersUpdateAvailableFalse(t *testing.T) {
-	now := time.Now()
+	now := metav1.Now()
 	repo := &testRepo{
 		results: []scan.Result{
 			{Source: "repo-1", Chart: "chart-a", Dependency: "dep-x", Type: "helm", Protocol: "https", Scope: "patch", CurrentVersion: "1.0.0", LatestVersion: "1.0.1", UpdateAvailable: false, CheckedAt: now},
@@ -51,7 +61,7 @@ func TestResultCollector_FiltersUpdateAvailableFalse(t *testing.T) {
 	}
 
 	reg := mustNewRegistry(t)
-	NewResultCollector(repo).Register(reg)
+	reg.MustRegister(NewResultCollector(repo.snap, nil))
 
 	count := testutil.CollectAndCount(reg, "update_checker_dependency_outdated_info")
 	if count != 0 {
@@ -60,7 +70,7 @@ func TestResultCollector_FiltersUpdateAvailableFalse(t *testing.T) {
 }
 
 func TestResultCollector_EmitsOutdatedOnly(t *testing.T) {
-	now := time.Now()
+	now := metav1.Now()
 	repo := &testRepo{
 		results: []scan.Result{
 			{Source: "gitops", Chart: "nginx-ingress", Dependency: "ingress-nginx", Type: "helm", Protocol: "https", Scope: "major", CurrentVersion: "4.0.0", LatestVersion: "5.0.0", UpdateAvailable: true, CheckedAt: now},
@@ -71,7 +81,7 @@ func TestResultCollector_EmitsOutdatedOnly(t *testing.T) {
 	}
 
 	reg := mustNewRegistry(t)
-	NewResultCollector(repo).Register(reg)
+	reg.MustRegister(NewResultCollector(repo.snap, nil))
 
 	count := testutil.CollectAndCount(reg, "update_checker_dependency_outdated_info")
 	if count != 2 {
@@ -80,7 +90,7 @@ func TestResultCollector_EmitsOutdatedOnly(t *testing.T) {
 }
 
 func TestResultCollector_Labels(t *testing.T) {
-	now := time.Now()
+	now := metav1.Now()
 	repo := &testRepo{
 		results: []scan.Result{
 			{Source: "flux-repo", Chart: "release-1", Dependency: "common", Type: "fluxcd", Protocol: "oci", Scope: "major", CurrentVersion: "1.0.0", LatestVersion: "2.0.0", UpdateAvailable: true, CheckedAt: now},
@@ -89,7 +99,7 @@ func TestResultCollector_Labels(t *testing.T) {
 	}
 
 	reg := mustNewRegistry(t)
-	NewResultCollector(repo).Register(reg)
+	reg.MustRegister(NewResultCollector(repo.snap, nil))
 
 	families, err := reg.Gather()
 	if err != nil {
@@ -134,12 +144,12 @@ func TestResultCollector_Labels(t *testing.T) {
 }
 
 func TestResultCollector_DynamicState(t *testing.T) {
-	now := time.Now()
+	now := metav1.Now()
 	repo := &testRepo{}
-	collector := NewResultCollector(repo)
+	collector := NewResultCollector(repo.snap, nil)
 
 	reg := mustNewRegistry(t)
-	collector.Register(reg)
+	reg.MustRegister(collector)
 
 	// Initially empty.
 	count := testutil.CollectAndCount(reg, "update_checker_dependency_outdated_info")

@@ -1,0 +1,36 @@
+# The build needs go.mod, go.sum and the Go sources (including the embedded
+# internal/dashboard/ui). Everything below is either build context that only
+# invalidates the layer cache, or content that must not end up in the image.
+
+# VCS and CI
+.git
+.gitignore
+.githooks
+.github
+
+# Local build output
+bin
+update-checker
+coverage.txt
+coverage.html
+*.log
+
+# Local-only state and scratch dirs (see .gitignore)
+.env
+.env.local
+todo
+data
+test-repo
+update-checker-api-*
+yk-update-checker-*
+.DS_Store
+
+# Not read by the build
+docs
+charts
+examples
+README.md
+CHANGELOG.md
+AGENTS.md
+LICENSE
+Makefile

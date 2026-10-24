@@ -1,56 +1,110 @@
+// Package scan walks a repository, checks every reference it finds and reports the outcome per repository.
 package scan
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/Masterminds/semver/v3"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/yuriy-kovalchuk/yk-update-checker/internal/config"
+	"github.com/yuriy-kovalchuk/yk-update-checker/internal/errkind"
 	"github.com/yuriy-kovalchuk/yk-update-checker/internal/extractor"
+	"github.com/yuriy-kovalchuk/yk-update-checker/internal/gitsync"
 	"github.com/yuriy-kovalchuk/yk-update-checker/internal/registry"
 )
 
-// Runner clones repositories and scans them for chart dependencies.
-type Runner struct {
-	repos          []config.Repo
-	newExtractors  func() []extractor.Extractor
-	scope          registry.Scope
-	parallelChecks int
-	gitCacheDir    string
-	cache          *registry.IndexCache
+// RunnerOptions configures a Runner. Named fields instead of positional arguments: several of them share a type and are easy to swap.
+type RunnerOptions struct {
+	Repos []config.Repo
+	// NewExtractors builds a fresh extractor set per repository: FluxCD keeps cross-file state that must not leak from one repository into the next.
+	NewExtractors  func() []extractor.Extractor
+	Scope          registry.Scope
+	ParallelChecks int
+	// GitCacheDir keeps clones between runs; empty uses a temporary workspace that is removed after each Run.
+	GitCacheDir string
+	// Cache holds fetched registry data for this Run; every scan process builds its own.
+	Cache *registry.IndexCache
+	// ScanTimeout bounds a whole Run; 0 means no deadline (config scan_timeout).
+	ScanTimeout time.Duration
+	// GitCommandTimeout bounds each git subprocess. 0 means gitsync.DefaultCommandTimeout; a negative value disables the limit.
+	GitCommandTimeout time.Duration
+	// MaxFileBytes skips repository files larger than this; 0 means DefaultMaxFileBytes.
+	MaxFileBytes int64
+	// OnRepo is called once per repository as it finishes; its error fails that repository.
+	OnRepo func(repo string, results []Result, err error) error
 }
 
-// NewRunner creates a Runner that clones the given repos and scans them for outdated dependencies.
-// cache is shared across Runs: serve mode passes one long-lived TTL-bounded
-// cache, one-shot scans pass a per-run cache.
-func NewRunner(repos []config.Repo, newExtractors func() []extractor.Extractor, scope registry.Scope, parallelChecks int, gitCacheDir string, cache *registry.IndexCache) *Runner {
-	return &Runner{
-		repos:          repos,
-		newExtractors:  newExtractors,
-		scope:          scope,
-		parallelChecks: parallelChecks,
-		gitCacheDir:    gitCacheDir,
-		cache:          cache,
-	}
+// DefaultMaxFileBytes caps one repository file the scan reads.
+const DefaultMaxFileBytes = 10 << 20
+
+// maxConcurrentRepos bounds parallel clones: two git children fit the memory the 512Mi scan pod leaves outside the Go heap.
+const maxConcurrentRepos = 2
+
+// Runner clones repositories and scans them for outdated dependencies.
+type Runner struct {
+	opts   RunnerOptions
+	syncer *gitsync.Syncer
 }
+
+// NewRunner creates a Runner from opts.
+func NewRunner(opts RunnerOptions) *Runner {
+	timeout := opts.GitCommandTimeout
+	switch {
+	case timeout == 0:
+		timeout = gitsync.DefaultCommandTimeout
+	case timeout < 0:
+		timeout = 0
+	}
+	if opts.Cache == nil {
+		opts.Cache = registry.NewIndexCache()
+	}
+	if opts.MaxFileBytes <= 0 {
+		opts.MaxFileBytes = DefaultMaxFileBytes
+	}
+	if opts.ParallelChecks <= 0 {
+		opts.ParallelChecks = config.DefaultParallelChecks
+	}
+	return &Runner{opts: opts, syncer: gitsync.New(timeout)}
+}
+
+// RepoError is a repository that could not be synced. Callers use Repo to keep that repository's previous results instead of dropping them.
+type RepoError struct {
+	Repo string
+	Err  error
+}
+
+func (e *RepoError) Error() string { return "repo " + e.Repo + ": " + e.Err.Error() }
+
+func (e *RepoError) Unwrap() error { return e.Err }
 
 // Run syncs all repos and returns aggregated results.
-// repoErrs holds per-repo sync failures; results from the remaining repos are
-// still returned alongside them. err is non-nil only when nothing could be
-// scanned at all (context cancelled or every repo failed) — callers must not
-// treat such a run as a completed scan.
 func (r *Runner) Run(ctx context.Context) (results []Result, repoErrs []error, err error) {
+	if r.opts.ScanTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.opts.ScanTimeout)
+		defer cancel()
+		// Turn "context deadline exceeded" into something an operator can act on, and make sure the caller sees a failure rather than a truncated scan.
+		defer func() {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				slog.Warn("scan timed out",
+					"scan_timeout", r.opts.ScanTimeout, "repos_scanned", len(results), "repo_errors", len(repoErrs))
+				err = errkind.Wrap(errkind.Timeout, fmt.Errorf("scan exceeded scan_timeout of %s (%d of %d repos completed) "+
+					"- raise scan_timeout or set it to 0 to disable", r.opts.ScanTimeout, len(results), len(r.opts.Repos)))
+			}
+		}()
+	}
+
 	workDir, cleanup, err := r.setupWorkspace()
 	if err != nil {
 		return nil, nil, err
@@ -65,46 +119,57 @@ func (r *Runner) Run(ctx context.Context) (results []Result, repoErrs []error, e
 
 	var mu sync.Mutex
 
-	runConcurrent(ctx, r.repos, r.parallelChecks, func(ctx context.Context, repo config.Repo) {
-		dest := filepath.Join(workDir, config.SafeName(repo.Name))
-		slog.Info("syncing repo", "name", repo.Name, "url", repo.URL)
-
-		if err := syncRepo(ctx, repo, dest); err != nil {
-			slog.Error("sync failed", "repo", repo.Name, "error", err)
-			mu.Lock()
-			repoErrs = append(repoErrs, fmt.Errorf("repo %s: %w", repo.Name, err))
-			mu.Unlock()
+	runConcurrent(ctx, r.opts.Repos, maxConcurrentRepos, func(ctx context.Context, repo config.Repo) {
+		repoResults, err := r.scanRepo(ctx, workDir, repo)
+		if ctx.Err() != nil {
+			return // interrupted: not scanned, so its previous report stands
+		}
+		if r.opts.OnRepo != nil {
+			if hookErr := r.opts.OnRepo(repo.Name, repoResults, err); err == nil {
+				err = hookErr // a report that was not stored is a failed repository
+			}
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if err != nil {
+			slog.Error("repo failed", "repo", repo.Name, "error", err)
+			repoErrs = append(repoErrs, &RepoError{Repo: repo.Name, Err: err})
 			return
 		}
-
-		scanPath := dest
-		if repo.Path != "" {
-			scanPath = filepath.Join(dest, repo.Path)
-		}
-
-		repoResults := r.scanDir(ctx, repo.Name, scanPath, r.cache)
-		slog.Info("scan done", "repo", repo.Name, "results", len(repoResults))
-
-		mu.Lock()
 		results = append(results, repoResults...)
-		mu.Unlock()
 	})
 
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, nil, fmt.Errorf("scan interrupted: %w", ctxErr)
 	}
-	if len(repoErrs) == len(r.repos) {
+	if len(repoErrs) == len(r.opts.Repos) {
 		return nil, nil, fmt.Errorf("all repos failed to sync: %w", errors.Join(repoErrs...))
 	}
 	return results, repoErrs, nil
 }
 
+// scanRepo syncs one repository and checks every reference in it.
+func (r *Runner) scanRepo(ctx context.Context, workDir string, repo config.Repo) ([]Result, error) {
+	dest := filepath.Join(workDir, config.SafeName(repo.Name))
+	slog.Info("syncing repo", "name", repo.Name, "url", gitsync.RedactURL(repo.URL))
+	if err := r.syncer.Sync(ctx, repo, dest); err != nil {
+		return nil, err
+	}
+	repoDir, scanPath, err := scanRoot(dest, repo.Path)
+	if err != nil {
+		return nil, err
+	}
+	results := r.scanDir(ctx, repo.Name, repoDir, scanPath)
+	slog.Info("scan done", "repo", repo.Name, "results", len(results))
+	return results, nil
+}
+
 func (r *Runner) setupWorkspace() (workDir string, cleanup bool, err error) {
-	if r.gitCacheDir != "" {
-		if err := os.MkdirAll(r.gitCacheDir, 0o755); err != nil {
+	if r.opts.GitCacheDir != "" {
+		if err := os.MkdirAll(r.opts.GitCacheDir, 0o755); err != nil {
 			return "", false, fmt.Errorf("create git cache dir: %w", err)
 		}
-		return r.gitCacheDir, false, nil
+		return r.opts.GitCacheDir, false, nil
 	}
 	dir, err := os.MkdirTemp("", "yk-scan-*")
 	if err != nil {
@@ -115,242 +180,224 @@ func (r *Runner) setupWorkspace() (workDir string, cleanup bool, err error) {
 
 type pendingCheck struct {
 	source string
+	path   string // file the reference was found in, relative to the repo checkout
 	chart  string
 	exType string
-	ref    extractor.ChartRef
+	ref    extractor.Ref
 }
 
-func (r *Runner) scanDir(ctx context.Context, source, root string, cache *registry.IndexCache) []Result {
-	extractors := r.newExtractors()
-
-	walkYAML := func(fn func(path string, content []byte)) {
-		if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() || !isYAML(path) {
-				return nil
-			}
-			content, err := os.ReadFile(path)
-			if err != nil {
-				return nil
-			}
-			fn(path, content)
-			return nil
-		}); err != nil {
-			slog.Warn("walk dir failed", "root", root, "error", err)
-		}
+// scanRoot resolves the directory a scan starts in and refuses one that is missing or escapes the checkout by symlink.
+func scanRoot(checkout, sub string) (repoDir, root string, err error) {
+	repoDir, err = filepath.EvalSymlinks(checkout)
+	if err != nil {
+		return "", "", err
 	}
+	root, err = filepath.EvalSymlinks(filepath.Join(checkout, sub))
+	if err != nil {
+		return "", "", errkind.Wrap(errkind.NotFound, fmt.Errorf("path %q does not exist in the repository", sub))
+	}
+	if rel, err := filepath.Rel(repoDir, root); err != nil || !filepath.IsLocal(rel) {
+		return "", "", errkind.Wrap(errkind.Unsupported, fmt.Errorf("path %q leads outside the repository through a symlink", sub))
+	}
+	if info, err := os.Stat(root); err != nil || !info.IsDir() {
+		return "", "", errkind.Wrap(errkind.NotFound, fmt.Errorf("path %q is not a directory in the repository", sub))
+	}
+	return repoDir, root, nil
+}
 
-	// Pass 1: collect cross-file references
-	walkYAML(func(path string, content []byte) {
+// scanDir scans root, a directory inside the checkout at repoDir.
+func (r *Runner) scanDir(ctx context.Context, source, repoDir, root string) []Result {
+	extractors := r.opts.NewExtractors()
+	files := collectFiles(root, extractors, r.opts.MaxFileBytes)
+	pending := extractChecks(source, repoDir, files, extractors)
+	return r.checkAll(ctx, pending)
+}
+
+// collectFiles walks root once, reading each scannable file once.
+func collectFiles(root string, extractors []extractor.Extractor, maxBytes int64) []*extractor.File {
+	var matched []*extractor.File
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			slog.Warn("skipping unreadable path", "path", path, "error", err)
+			return nil
+		}
+		if d.IsDir() || !extractor.IsScannable(path) {
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			slog.Warn("skipping non-regular file", "path", path, "type", d.Type().String())
+			return nil
+		}
+		content, err := readCapped(path, maxBytes)
+		if err != nil {
+			slog.Warn("skipping file", "path", path, "error", err)
+			return nil
+		}
+		f := extractor.NewFile(path, content)
 		for _, ex := range extractors {
-			if err := ex.PrepareFile(path, content); err != nil {
+			if err := ex.PrepareFile(f); err != nil {
 				slog.Warn("extractor prepare failed", "type", ex.Type(), "file", path, "error", err)
 			}
 		}
+		if slices.ContainsFunc(extractors, func(ex extractor.Extractor) bool { return ex.Match(f) }) {
+			matched = append(matched, f)
+		}
+		return nil
 	})
+	if err != nil {
+		slog.Warn("walk dir failed", "root", root, "error", err)
+	}
+	return matched
+}
 
-	// Pass 2: extract chart references
+// readCapped reads a file of at most maxBytes, refusing a larger one rather than truncating it (a truncated manifest parses into the wrong references).
+func readCapped(path string, maxBytes int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	content, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(content)) > maxBytes {
+		return nil, fmt.Errorf("larger than the %d byte limit for a repository file", maxBytes)
+	}
+	return content, nil
+}
+
+// extractChecks runs the matching extractors over files and turns every reference into a pending version check.
+func extractChecks(source, repoDir string, files []*extractor.File, extractors []extractor.Extractor) []pendingCheck {
 	var pending []pendingCheck
-	walkYAML(func(path string, content []byte) {
+	for i, f := range files {
+		rel, err := filepath.Rel(repoDir, f.Path)
+		if err != nil {
+			rel = f.Path
+		}
 		for _, ex := range extractors {
-			if !ex.Match(path, content) {
+			if !ex.Match(f) {
 				continue
 			}
-			chartName, refs, err := ex.Extract(path, content)
+			chartName, refs, err := ex.Extract(f)
 			if err != nil {
-				slog.Warn("extract failed", "file", path, "type", ex.Type(), "error", err)
+				slog.Warn("extract failed", "file", f.Path, "type", ex.Type(), "error", err)
 				continue
 			}
 			for _, ref := range refs {
-				pending = append(pending, pendingCheck{source: source, chart: chartName, exType: ex.Type(), ref: ref})
+				pending = append(pending, pendingCheck{source: source, path: filepath.ToSlash(rel), chart: chartName, exType: ex.Type(), ref: ref})
 			}
 		}
-	})
+		files[i] = nil
+	}
+	return pending
+}
 
-	// Pass 3: check versions concurrently
+// checkAll resolves every pending check against its registry, concurrently.
+func (r *Runner) checkAll(ctx context.Context, pending []pendingCheck) []Result {
 	var (
 		results []Result
 		mu      sync.Mutex
 	)
-	runConcurrent(ctx, pending, r.parallelChecks, func(ctx context.Context, p pendingCheck) {
-		checkErr := ""
-		latest, err := registry.Latest(ctx, cache, p.ref.Protocol, p.ref.Repository, p.ref.Name, p.ref.CurrentVersion, r.scope)
-		if err != nil {
-			slog.Warn("version check failed", "dep", p.ref.Name, "repo", p.ref.Repository, "error", err)
-			latest = ""
-			checkErr = err.Error()
+	runConcurrent(ctx, pending, r.opts.ParallelChecks, func(ctx context.Context, p pendingCheck) {
+		var res Result
+		if p.ref.Protocol == extractor.ProtocolImage {
+			res = r.checkImage(ctx, p, p.label())
+		} else {
+			res = r.checkChart(ctx, p, p.label())
 		}
-
-		chart := p.ref.Chart
-		if chart == "" {
-			chart = p.chart
-		}
-
 		mu.Lock()
-		results = append(results, Result{
-			Source:          p.source,
-			Chart:           chart,
-			Dependency:      p.ref.Name,
-			Type:            p.exType,
-			Protocol:        p.ref.Protocol,
-			CurrentVersion:  p.ref.CurrentVersion,
-			LatestVersion:   latest,
-			Scope:           classifyScope(p.ref.CurrentVersion, latest),
-			UpdateAvailable: isNewer(latest, p.ref.CurrentVersion),
-			CheckError:      checkErr,
-			CheckedAt:       time.Now(),
-		})
+		results = append(results, res)
 		mu.Unlock()
 	})
-
 	return results
 }
 
-func isYAML(path string) bool {
-	ext := strings.ToLower(filepath.Ext(path))
-	return ext == ".yaml" || ext == ".yml"
-}
-
-// parseVersionPair parses current and latest as semver. ok is false when
-// either fails to parse (e.g. git SHAs) — callers fall back to string
-// comparison in that case. Both isNewer and classifyScope compare the same
-// pair of versions and must stay consistent with each other.
-func parseVersionPair(current, latest string) (l, c *semver.Version, ok bool) {
-	l, err1 := semver.NewVersion(latest)
-	c, err2 := semver.NewVersion(current)
-	if err1 != nil || err2 != nil {
-		return nil, nil, false
+// label is the chart column of a check: the reference's own owner, else the file's chart name.
+func (p pendingCheck) label() string {
+	chart := p.ref.Chart
+	if chart == "" {
+		return p.chart
 	}
-	return l, c, true
-}
-
-func isNewer(latest, current string) bool {
-	if latest == "" {
-		return false
-	}
-	l, c, ok := parseVersionPair(current, latest)
-	if !ok {
-		return latest != current
-	}
-	return l.GreaterThan(c)
-}
-
-// classifyScope determines the bump size (major/minor/patch) between current and
-// latest versions.  Returns "unknown" when the version strings are not parseable
-// as semver, or empty string when no newer version exists.
-func classifyScope(current, latest string) string {
-	if latest == "" || current == latest {
-		return ""
-	}
-	l, c, ok := parseVersionPair(current, latest)
-	if !ok {
-		// Non-semver versions (e.g. git SHAs); can't classify the bump size.
-		return "unknown"
-	}
-	switch {
-	case l.Major() != c.Major():
-		return "major"
-	case l.Minor() != c.Minor():
-		return "minor"
-	default:
-		return "patch"
-	}
-}
-
-// ── Git helpers ───────────────────────────────────────────────────────────────
-
-func syncRepo(ctx context.Context, repo config.Repo, dest string) error {
-	if _, err := os.Stat(filepath.Join(dest, ".git")); err == nil {
-		return fetchRepo(ctx, repo, dest)
-	}
-	return cloneRepo(ctx, repo, dest)
-}
-
-func cloneRepo(ctx context.Context, repo config.Repo, dest string) error {
-	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return err
-	}
-	cmd := exec.CommandContext(ctx, "git", "clone", "--depth=1", "--single-branch", repo.URL, dest)
-	cmd.Env = authEnv(repo)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git clone: %w\n%s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-func fetchRepo(ctx context.Context, repo config.Repo, dest string) error {
-	// Reset the remote URL in case a cached clone predates the current config
-	// (older versions embedded credentials in the URL; tokens also rotate).
-	setURL := exec.CommandContext(ctx, "git", "-C", dest, "remote", "set-url", "origin", repo.URL)
-	if out, err := setURL.CombinedOutput(); err != nil {
-		return fmt.Errorf("git remote set-url: %w\n%s", err, strings.TrimSpace(string(out)))
-	}
-	fetch := exec.CommandContext(ctx, "git", "-C", dest, "fetch", "--depth=1", "origin")
-	fetch.Env = authEnv(repo)
-	if out, err := fetch.CombinedOutput(); err != nil {
-		return fmt.Errorf("git fetch: %w\n%s", err, strings.TrimSpace(string(out)))
-	}
-	reset := exec.CommandContext(ctx, "git", "-C", dest, "reset", "--hard", "FETCH_HEAD")
-	if out, err := reset.CombinedOutput(); err != nil {
-		return fmt.Errorf("git reset: %w\n%s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-// authEnv builds the git environment for a repo. HTTP credentials are passed
-// per-invocation via GIT_CONFIG_* (http.extraheader) so they end up neither in
-// the process argv nor persisted in the clone's .git/config.
-func authEnv(repo config.Repo) []string {
-	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	auth := repo.Auth
-	switch auth.Type {
-	case "ssh":
-		if auth.SSHKeyPath != "" {
-			env = append(env,
-				"GIT_SSH_COMMAND=ssh -i "+auth.SSHKeyPath+" -o StrictHostKeyChecking=accept-new -o BatchMode=yes",
-			)
-		}
-	case "token":
-		tok := auth.Token
-		if tok == "" && auth.TokenFile != "" {
-			tok = readCredFile(auth.TokenFile)
-		}
-		if tok != "" {
-			env = appendAuthHeader(env, "git", tok)
-		}
-	case "basic":
-		pass := auth.Password
-		if pass == "" && auth.PasswordFile != "" {
-			pass = readCredFile(auth.PasswordFile)
-		}
-		if pass != "" {
-			env = appendAuthHeader(env, auth.Username, pass)
+	if p.exType == "dockerfile" {
+		// A Dockerfile ref is labelled "<file>/<stage>", unique only inside its own directory.
+		if i := strings.LastIndex(p.path, "/"); i >= 0 {
+			chart = p.path[:i] + "/" + chart
 		}
 	}
-	return env
+	return chart
 }
 
-func appendAuthHeader(env []string, user, pass string) []string {
-	cred := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
-	return append(env,
-		"GIT_CONFIG_COUNT=1",
-		"GIT_CONFIG_KEY_0=http.extraheader",
-		"GIT_CONFIG_VALUE_0=Authorization: Basic "+cred,
-	)
+// newResult fills the fields every check reports, whatever its outcome.
+func newResult(p pendingCheck, chart string) Result {
+	return Result{
+		Source:         p.source,
+		Path:           p.path,
+		Chart:          chart,
+		Dependency:     p.ref.Name,
+		Type:           p.exType,
+		Kind:           p.ref.Kind,
+		Protocol:       p.ref.Protocol,
+		CurrentVersion: p.ref.CurrentVersion,
+		FinalStage:     p.ref.FinalStage,
+		CheckedAt:      metav1.Now(),
+	}
 }
 
-func readCredFile(path string) string {
-	data, err := os.ReadFile(path)
+// checkChart resolves the newest chart version for a Helm/FluxCD reference.
+func (r *Runner) checkChart(ctx context.Context, p pendingCheck, chart string) Result {
+	res := newResult(p, chart)
+	latest, err := registry.Latest(ctx, r.opts.Cache, p.ref.Protocol, p.ref.Repository, p.ref.Name, p.ref.CurrentVersion, r.opts.Scope)
 	if err != nil {
-		// Do not log err or path: CodeQL (go/clear-text-logging) treats values
-		// flowing from credential-file configuration as sensitive. The auth
-		// failure still surfaces in the scan result's CheckError.
-		slog.Warn("credential file unreadable")
-		return ""
+		slog.Warn("version check failed", "dep", p.ref.Name, "repo", p.ref.Repository, "error", err)
+		res.CheckError, res.CheckErrorKind = err.Error(), errkind.Of(err)
+		return res
 	}
-	return strings.TrimSpace(string(data))
+	res.LatestVersion = latest
+	res.Scope = registry.ChartScope(p.ref.CurrentVersion, latest)
+	res.UpdateAvailable = registry.IsNewerChart(latest, p.ref.CurrentVersion)
+	return res
 }
 
-// ── Concurrency ───────────────────────────────────────────────────────────────
+// checkImage resolves the newest comparable tag for a container image.
+func (r *Runner) checkImage(ctx context.Context, p pendingCheck, chart string) Result {
+	res := newResult(p, chart)
+	res.TagKind = string(registry.TagKindOf(p.ref.CurrentVersion))
+	info, err := r.opts.Cache.LatestImage(ctx, p.ref.Repository, p.ref.CurrentVersion, p.ref.Digest, r.opts.Scope)
+	if err != nil {
+		slog.Warn("image check failed", "image", p.ref.Repository, "tag", p.ref.CurrentVersion, "error", err)
+		res.CheckError, res.CheckErrorKind = err.Error(), errkind.Of(err)
+		return res
+	}
+	res.TagKind = string(info.Kind)
+	res.LatestVersion = info.Latest
+	res.CurrentResolved = info.Resolved
+	res.ImageDigest = info.Digest
+	res.Note = info.Note
+	res.Skipped = info.Skipped
+	res.CurrentPushedAt = timePtr(info.CurrentPushed)
+	res.LatestPushedAt = timePtr(info.LatestPushed)
+	res.UpdateAvailable = info.Latest != ""
+	// The bump is measured from what the look-up compared against: the version a floating tag resolves to, when it resolved to one.
+	base := p.ref.CurrentVersion
+	if info.Resolved != "" {
+		base = info.Resolved
+	}
+	res.Scope = registry.ImageScope(base, info.Latest)
+	// A reference pinned to a digest that no longer matches what the tag serves is drift even on the very first scan.
+	if p.ref.Digest != "" && info.Digest != "" && p.ref.Digest != info.Digest {
+		res.DigestChanged = true
+	}
+	return res
+}
+
+// timePtr omits unknown (zero) times from the JSON.
+func timePtr(t time.Time) *metav1.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &metav1.Time{Time: t}
+}
 
 func runConcurrent[T any](ctx context.Context, items []T, limit int, fn func(context.Context, T)) {
 	var wg sync.WaitGroup
@@ -359,7 +406,6 @@ func runConcurrent[T any](ctx context.Context, items []T, limit int, fn func(con
 		if ctx.Err() != nil {
 			break
 		}
-		item := item
 		wg.Add(1)
 		sem <- struct{}{}
 		go func() {

@@ -6,4 +6,10 @@ metadata:
     {{- include "yk-update-checker.labels" . | nindent 4 }}
 data:
   config.yaml: |
-    {{- .Values.scanner.config | toYaml | nindent 4 }}
+    {{- include "yk-update-checker.rejectUnsafeRepos" . }}
+    {{- include "yk-update-checker.scannerConfig" . | nindent 4 }}
+  # Mounted next to config.yaml; every ssh repo's auth.known_hosts_file points here.
+  {{- if eq (include "yk-update-checker.hasKnownHosts" .) "true" }}
+  known_hosts: |
+    {{- .Values.scanner.ssh.knownHosts | trim | nindent 4 }}
+  {{- end }}

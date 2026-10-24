@@ -1,125 +1,106 @@
-// Package registry resolves the latest available chart version from HTTP(S) or OCI registries.
+// Package registry resolves the newest versions of Helm charts and container images.
 package registry
 
 import (
 	"context"
 	"errors"
-	"fmt"
-	"io"
 	"net/http"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/Masterminds/semver/v3"
 	"github.com/google/go-containerregistry/pkg/authn"
-	"github.com/google/go-containerregistry/pkg/name"
-	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"golang.org/x/sync/singleflight"
-	"gopkg.in/yaml.v3"
 )
 
-// maxConcurrentIndexFetches bounds how many index.yaml downloads are parsed at
-// once. Decoding a large index transiently needs ~15x its size in heap, so
-// unbounded concurrency OOMs the pod on big repositories.
-const maxConcurrentIndexFetches = 2
-
-// maxIndexBytes caps how large an index.yaml the checker is willing to parse
-// (a var so tests can lower it).
-var maxIndexBytes = int64(50 << 20) // 50 MB
-
-// Scope controls which upgrade levels are eligible.
-type Scope string
-
-// Eligible upgrade levels for version comparisons.
-const (
-	ScopeAll   Scope = "all"
-	ScopeMajor Scope = "major"
-	ScopeMinor Scope = "minor"
-	ScopePatch Scope = "patch"
-)
-
-var validScopes = map[Scope]bool{
-	ScopeAll: true, ScopeMajor: true, ScopeMinor: true, ScopePatch: true,
-}
-
-// IsValid reports whether s is a recognised scope value.
-func (s Scope) IsValid() bool { return validScopes[s] }
-
-// ParseScope converts a string to a Scope, falling back to ScopeAll.
-func ParseScope(s string) Scope {
-	sc := Scope(s)
-	if sc.IsValid() {
-		return sc
-	}
-	return ScopeAll
-}
-
-var httpClient = &http.Client{Timeout: 30 * time.Second}
-
-// cached is a memoized fetch outcome; errors are stored too so a broken
-// registry is not re-fetched for every dependency that references it.
+// cached is a memoized fetch outcome; errors too, so a broken registry is asked once per scan.
 type cached[V any] struct {
-	at  time.Time
 	val V
 	err error
 }
 
-// IndexCache stores fetched registry data (parsed Helm indexes and OCI tag
-// lists). Used per-scan, or shared across scans in serve mode where a TTL
-// bounds how long entries are reused.
+// IndexCache memoizes registry lookups for the length of one scan.
 type IndexCache struct {
 	mu      sync.RWMutex
 	indexes map[string]cached[*helmIndex]
 	tags    map[string]cached[[]string]
-	ttl     time.Duration
 
-	sf       singleflight.Group
+	// image look-ups: check outcome, manifest/config metadata, vendor tag reports, referrers and the authenticated client per repository.
+	imgChecks  map[string]cached[ImageInfo]
+	imgMetas   map[string]cached[imageMeta]
+	imgDates   map[string]cached[tagDates]
+	imgInfos   map[string]cached[tagInfo]
+	imgRefs    map[string]cached[int]
+	imgSigs    map[string]cached[sigStatus]
+	imgClients map[string]*http.Client
+
+	// verifyTags decides whether winning candidate tags are checked for being real releases before being reported (config: verify_image_tags).
+	verifyTags bool
+
+	limits       limits
+	transport    http.RoundTripper // policyTransport: every request goes through it
+	httpClient   *http.Client      // Helm index.yaml fetches
+	vendorClient *http.Client      // anonymous vendor tag APIs (Docker Hub, Quay, Harbor)
+	keychain     authn.Keychain
+	// vendors overrides the vendor tag API per registry host; hosts absent here fall back to defaultVendorAPIs and then to vendorAPIFor's guess.
+	vendors map[string]vendorAPI
+
+	sf       singleflight.Group // one group for every cache below; getOrDo qualifies keys with the store name
 	fetchSem chan struct{}
 }
 
-// NewIndexCache creates an empty IndexCache. ttl bounds how long fetched
-// entries are reused; ttl <= 0 keeps them valid for the cache's lifetime.
-func NewIndexCache(ttl time.Duration) *IndexCache {
-	return &IndexCache{
-		indexes:  make(map[string]cached[*helmIndex]),
-		tags:     make(map[string]cached[[]string]),
-		ttl:      ttl,
-		fetchSem: make(chan struct{}, maxConcurrentIndexFetches),
+// NewIndexCache creates an empty IndexCache.
+func NewIndexCache(opts ...CacheOption) *IndexCache {
+	c := &IndexCache{
+		indexes:    make(map[string]cached[*helmIndex]),
+		tags:       make(map[string]cached[[]string]),
+		imgChecks:  make(map[string]cached[ImageInfo]),
+		imgMetas:   make(map[string]cached[imageMeta]),
+		imgDates:   make(map[string]cached[tagDates]),
+		imgInfos:   make(map[string]cached[tagInfo]),
+		imgRefs:    make(map[string]cached[int]),
+		imgSigs:    make(map[string]cached[sigStatus]),
+		imgClients: make(map[string]*http.Client),
+		verifyTags: true,
+		fetchSem:   make(chan struct{}, maxConcurrentIndexFetches),
+
+		limits:    defaultLimits(),
+		transport: policyTransport{next: http.DefaultTransport},
+		keychain:  authn.DefaultKeychain,
+		vendors:   make(map[string]vendorAPI),
 	}
+	c.httpClient = newHTTPClient(30*time.Second, c.transport)
+	c.vendorClient = newHTTPClient(20*time.Second, c.transport)
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
-// fresh returns the memoized outcome for key if present and not expired.
+// fresh returns the memoized outcome for key, if any.
 func fresh[V any](c *IndexCache, store map[string]cached[V], key string) (val V, ok bool, err error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	entry, exists := store[key]
-	if !exists || (c.ttl > 0 && time.Since(entry.at) >= c.ttl) {
-		return
-	}
-	return entry.val, true, entry.err
+	return entry.val, exists, entry.err
 }
 
-// getOrDo returns the memoized outcome for key, collapsing concurrent misses
-// for the same key into a single fetch (singleflight); without it every worker
-// referencing the same repo fetches and decodes its own copy simultaneously.
-func getOrDo[V any](ctx context.Context, c *IndexCache, store map[string]cached[V], key string, fetch func(context.Context) (V, error)) (V, error) {
-	if val, ok, err := fresh(c, store, key); ok {
+// getOrDo memoizes and singleflight-collapses concurrent misses for the same key.
+func getOrDo[V any](ctx context.Context, c *IndexCache, storeName string, store map[string]cached[V], key string, fetch func(context.Context) (V, error)) (V, error) {
+	k := storeName + "|" + key
+	if val, ok, err := fresh(c, store, k); ok {
 		return val, err
 	}
 
-	v, err, _ := c.sf.Do(key, func() (any, error) {
+	v, err, _ := c.sf.Do(k, func() (any, error) {
 		// Re-check: an entry may have been filled while we waited for the key.
-		if val, ok, ferr := fresh(c, store, key); ok {
+		if val, ok, ferr := fresh(c, store, k); ok {
 			return val, ferr
 		}
-
 		val, ferr := fetch(ctx)
 		// Don't memoize cancellation: it says nothing about the registry.
 		if !errors.Is(ferr, context.Canceled) && !errors.Is(ferr, context.DeadlineExceeded) {
 			c.mu.Lock()
-			store[key] = cached[V]{at: time.Now(), val: val, err: ferr}
+			store[k] = cached[V]{val: val, err: ferr}
 			c.mu.Unlock()
 		}
 		return val, ferr
@@ -129,184 +110,4 @@ func getOrDo[V any](ctx context.Context, c *IndexCache, store map[string]cached[
 		return zero, err
 	}
 	return v.(V), nil
-}
-
-func (c *IndexCache) getIndex(ctx context.Context, scheme, repoURL string) (*helmIndex, error) {
-	return getOrDo(ctx, c, c.indexes, scheme+"://"+repoURL, func(ctx context.Context) (*helmIndex, error) {
-		select {
-		case c.fetchSem <- struct{}{}:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-		defer func() { <-c.fetchSem }()
-
-		return fetchIndex(ctx, scheme, repoURL)
-	})
-}
-
-// ociAuth is the authenticator used for OCI registries (a var so tests can
-// avoid shelling out to docker credential helpers).
-var ociAuth = remote.WithAuthFromKeychain(authn.DefaultKeychain)
-
-func (c *IndexCache) getTags(ctx context.Context, ref string) ([]string, error) {
-	return getOrDo(ctx, c, c.tags, "oci://"+ref, func(ctx context.Context) ([]string, error) {
-		repo, err := name.NewRepository(ref)
-		if err != nil {
-			return nil, fmt.Errorf("parse OCI ref %q: %w", ref, err)
-		}
-		tags, err := remote.List(repo, ociAuth, remote.WithContext(ctx))
-		if err != nil {
-			return nil, fmt.Errorf("list tags for %q: %w", ref, err)
-		}
-		return tags, nil
-	})
-}
-
-// Latest returns the latest stable chart version available in the registry.
-// Returns an empty string (no error) when no eligible update exists.
-func Latest(ctx context.Context, cache *IndexCache, protocol, repoURL, chartName, currentVersion string, scope Scope) (string, error) {
-	if repoURL == "" {
-		return "", fmt.Errorf("repository URL is empty for chart %q", chartName)
-	}
-	if currentVersion == "" {
-		return "", fmt.Errorf("current version is empty for chart %q", chartName)
-	}
-	switch p := strings.ToLower(protocol); p {
-	case "https", "http":
-		return latestHTTP(ctx, cache, p, repoURL, chartName, currentVersion, scope)
-	case "oci":
-		return latestOCI(ctx, cache, repoURL, chartName, currentVersion, scope)
-	default:
-		return "", fmt.Errorf("unsupported protocol: %s", protocol)
-	}
-}
-
-// resolveCurrent turns the version declared in a manifest into a concrete
-// semver. Helm allows ranges ("29.x", "~1.2.0", ">=1 <2"); for those, the
-// deployed version is the newest stable registry version matching the
-// constraint, so updates are measured from there.
-func resolveCurrent(currentVersion string, tags []string) (*semver.Version, error) {
-	if v, err := semver.NewVersion(currentVersion); err == nil {
-		return v, nil
-	}
-	c, err := semver.NewConstraint(currentVersion)
-	if err != nil {
-		return nil, fmt.Errorf("invalid current version %q: %w", currentVersion, err)
-	}
-	var best *semver.Version
-	for _, t := range tags {
-		v, err := semver.NewVersion(t)
-		if err != nil || v.Prerelease() != "" {
-			continue
-		}
-		if c.Check(v) && (best == nil || v.GreaterThan(best)) {
-			best = v
-		}
-	}
-	if best == nil {
-		return nil, fmt.Errorf("no registry version matches constraint %q", currentVersion)
-	}
-	return best, nil
-}
-
-func latestFromTags(current *semver.Version, tags []string, scope Scope) string {
-	var candidates []*semver.Version
-	for _, t := range tags {
-		v, err := semver.NewVersion(t)
-		if err != nil || v.Prerelease() != "" {
-			continue
-		}
-		if !v.GreaterThan(current) {
-			continue
-		}
-		switch scope {
-		case ScopePatch:
-			if v.Major() != current.Major() || v.Minor() != current.Minor() {
-				continue
-			}
-		case ScopeMinor:
-			if v.Major() != current.Major() {
-				continue
-			}
-		case ScopeAll, ScopeMajor:
-			// any newer stable version is eligible
-		}
-		candidates = append(candidates, v)
-	}
-	if len(candidates) == 0 {
-		return ""
-	}
-	sort.Sort(semver.Collection(candidates))
-	return candidates[len(candidates)-1].Original()
-}
-
-type helmIndexEntry struct {
-	Version string `yaml:"version"`
-}
-
-type helmIndex struct {
-	Entries map[string][]helmIndexEntry `yaml:"entries"`
-}
-
-func fetchIndex(ctx context.Context, scheme, repoURL string) (*helmIndex, error) {
-	indexURL := scheme + "://" + strings.TrimSuffix(repoURL, "/") + "/index.yaml"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, indexURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("build request for %s: %w", indexURL, err)
-	}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetch %s: %w", indexURL, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s returned %d", indexURL, resp.StatusCode)
-	}
-
-	body := &io.LimitedReader{R: resp.Body, N: maxIndexBytes + 1}
-	var index helmIndex
-	err = yaml.NewDecoder(body).Decode(&index)
-	// Truncated YAML often still parses cleanly, so the limit must be checked
-	// even when decoding succeeded — a silently truncated index would hide
-	// chart entries.
-	if body.N <= 0 {
-		return nil, fmt.Errorf("index.yaml at %s exceeds the %d byte size limit", indexURL, maxIndexBytes)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("parse index.yaml: %w", err)
-	}
-	return &index, nil
-}
-
-func latestHTTP(ctx context.Context, cache *IndexCache, scheme, repoURL, chartName, currentVersion string, scope Scope) (string, error) {
-	index, err := cache.getIndex(ctx, scheme, repoURL)
-	if err != nil {
-		return "", err
-	}
-	entries, ok := index.Entries[chartName]
-	if !ok {
-		return "", fmt.Errorf("chart %q not found in index at %s", chartName, strings.TrimSuffix(repoURL, "/"))
-	}
-	tags := make([]string, 0, len(entries))
-	for _, e := range entries {
-		tags = append(tags, e.Version)
-	}
-	current, err := resolveCurrent(currentVersion, tags)
-	if err != nil {
-		return "", err
-	}
-	return latestFromTags(current, tags, scope), nil
-}
-
-func latestOCI(ctx context.Context, cache *IndexCache, repoURL, chartName, currentVersion string, scope Scope) (string, error) {
-	ref := strings.TrimSuffix(repoURL, "/") + "/" + chartName
-	tags, err := cache.getTags(ctx, ref)
-	if err != nil {
-		return "", err
-	}
-	current, err := resolveCurrent(currentVersion, tags)
-	if err != nil {
-		return "", err
-	}
-	return latestFromTags(current, tags, scope), nil
 }

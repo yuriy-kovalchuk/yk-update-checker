@@ -1,11 +1,11 @@
-# Test values for yk-update-checker
-image:
-  tag: "0.1.1-alpha-dev"          # defaults to .Chart.AppVersion
+# Test values for yk-update-checker (make kind VALUES=examples/test-values.yaml)
 scanner:
   config:
     update_type: all          # all | major | minor | patch
     parallel_checks: 5
-    git_cache_dir: /tmp/git-cache
     repos:
       - name: my-gitops
         repo: https://github.com/yuriy-kovalchuk/homelab
+      # This project's own repo — has a multi-stage Dockerfile to scan.
+      - name: update-checker
+        repo: https://github.com/yuriy-kovalchuk/yk-update-checker
