@@ -34,6 +34,11 @@ To trigger via kubectl:
     --from=cronjob/{{ include "yk-update-checker.fullname" . }}-scanner \
     {{ include "yk-update-checker.fullname" . }}-manual-$(date +%s)
 
+The reports are resources in this namespace, so kubectl reads them without the UI:
+  kubectl --namespace {{ .Release.Namespace }} get repositoryscans
+  kubectl --namespace {{ .Release.Namespace }} get dependencies -l \
+    updatechecker.yuriykovalchuk.dev/outdated=true
+
 {{- if not .Values.scanner.config.repos }}
 
 WARNING: No repositories configured (scanner.config.repos is empty).

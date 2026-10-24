@@ -1,15 +1,23 @@
-# Default values for yk-update-checker.
-# All three deployment modes (binary, Docker, Kubernetes) use the same image.
+# Default values for yk-update-checker. Install one release per namespace: reports are namespaced by repository name, not by release.
+
+# Override the chart-derived object names (read by _helpers.tpl).
+nameOverride: ""
+fullnameOverride: ""
 
 image:
   repository: ghcr.io/yuriy-kovalchuk/yk-update-checker
   tag: ""          # defaults to .Chart.AppVersion
   pullPolicy: IfNotPresent
 
-# ── Dashboard (always-on serve mode) ─────────────────────────────────────────
+# Pull secrets for the checker's own image, e.g. `kubectl create secret docker-registry harbor-pull --docker-server=… -n <namespace>`.
+imagePullSecrets: []
+# - name: harbor-pull
+
+# ── Dashboard: results live in RepositoryScan/Dependency resources, so replicas are fine; only the leader exports metrics ──
 replicaCount: 1
 
 service:
+  # No NetworkPolicy ships with the chart: bound access yourself (docs/architecture.md, "Trust model & exposure").
   type: ClusterIP
   port: 80
   targetPort: 8080
@@ -33,7 +41,7 @@ resources:
     cpu: 500m
     memory: 128Mi
 
-# Security context for the serve Deployment. Overridden independently from scanner.
+# Security context for the dashboard Deployment. Overridden independently from scanner.
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 65534
@@ -56,41 +64,72 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 
-# Extra environment variables applied to the serve Deployment.
+# Extra environment variables applied to the dashboard Deployment.
 extraEnv: []
 # - name: FOO
 #   value: bar
 
 # ── Scanner CronJob ───────────────────────────────────────────────────────────
 scanner:
-  # CronJob schedule (standard 5-field cron expression). Default: daily at 00:00.
-  # Evaluated in the pod's timezone; the chart sets no TZ, so this is UTC.
+  # Cron schedule, in UTC (the pod sets no TZ).
   schedule: "0 0 * * *"
   # Suspend the CronJob without deleting it.
   suspend: false
 
+  # Backstop for a wedged scan Job (seconds); keep it above scanner.config.scan_timeout. Manual Jobs inherit it.
+  activeDeadlineSeconds: 2400
+  # A run that cannot start within this many seconds is recorded as missed instead of skipped silently.
+  startingDeadlineSeconds: 600
+
+  # Scan runs kept in each RepositoryScan's status.history (newest first); nothing keeps a copy of every run's items.
+  history:
+    runs: 10
+
+  # Extra env for the scan pod only (the Deployment uses top-level extraEnv).
+  extraEnv: []
+  # - name: HTTPS_PROXY
+  #   value: http://proxy.internal:3128
+
   # Scanner config — serialised as config.yaml mounted into the CronJob pod.
   config:
-    update_type: all          # all | major | minor | patch
-    parallel_checks: 5
-    git_cache_dir: /tmp/git-cache
-    registry_cache_ttl: 15m   # serve only: reuse fetched registry data between scans ("0" = per-scan)
+    update_type: all          # all | minor | patch  ("major" is accepted and behaves as all)
+    scan_timeout: 30m         # whole-scan budget; "0" = unbounded (discouraged, see the CronJob deadlines)
+    parallel_checks: 5        # registry lookups per repository; two repositories are scanned at a time
+    check_images: true        # container images referenced by workloads
+    check_dockerfiles: true   # base images in Dockerfile/Containerfile FROM lines
+    # Reject stray tags (backports, fork rebuilds) before offering them; false reports the highest tag as listed.
+    verify_image_tags: true
     repos: []
     # - name: my-gitops
     #   repo: https://github.com/example/my-gitops-repo
     #   path: kubernetes/apps   # optional sub-path
     #   auth:
-    #     type: token           # token | basic | ssh
-    #     existingSecret: github-token
-    #     existingSecretKey: token
+    #     type: token                              # token | basic | ssh
+    #     existingSecret: homelab-github-token     # a Secret you created; the chart
+    #     existingSecretKey: token                 # mounts it read-only for this repo
+    # Credentials come only from Secrets you create (auth.existingSecret, mounted read-only into the scan pod); see examples/credentials.values.yaml.
 
+  # A kubernetes.io/dockerconfigjson Secret for private registries (only its "auths" are read); Harbor's API gets the same account for push dates.
+  registryAuth:
+    existingSecret: ""
+    existingSecretKey: .dockerconfigjson
+
+  # SSH host key verification, for repos with auth.type: ssh.
+  ssh:
+    # true: an ssh repo needs its host keys in knownHosts or the chart refuses to render; false accepts any host key.
+    strictHostKeyChecking: true
+    # known_hosts content, e.g. from `ssh-keyscan -t ed25519,rsa github.com`; set as auth.known_hosts_file for every ssh repo.
+    knownHosts: ""
+    # github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkV6rm4KOFGObNWcPH5GLu...
+
+  # The Go heap gets 70% of the memory limit, the rest is for git; 512Mi fits one 20 MB Helm index decode.
   resources:
     requests:
       cpu: 50m
       memory: 64Mi
     limits:
       cpu: 1000m
-      memory: 256Mi
+      memory: 512Mi
 
   # Security context for the scanner CronJob — independent from deployment.
   podSecurityContext:
@@ -111,33 +150,30 @@ scanner:
       drop:
         - ALL
 
-# ── RBAC (required for the manual scan trigger) ───────────────────────────────
+# ── RBAC (needed by both halves) ──────────────────────────────────────────────
 rbac:
-  # Creates a Role + RoleBinding allowing the serve pod to create Jobs.
+  # Two Roles: the dashboard's (scan Jobs, report reads, leader Lease) and the scanner's (only the two update-checker resources, because that pod clones hostile content).
   create: true
 
 serviceAccount:
   create: true
   name: ""
+  scannerName: ""   # with create=false: the existing ServiceAccount the scan CronJob runs as
   annotations: {}
 
 # ── Prometheus / Alertmanager integration ──────────────────────────────────────
 grafana:
-  # Creates a ConfigMap with the pre-built Grafana dashboard JSON.
-  # When enabled, the label `grafana_dashboard: "1"` is added so that
-  # Grafana (or grafana-operator) auto-discovers and imports it.
+  # A ConfigMap with the Grafana dashboard, labelled grafana_dashboard: "1" for sidecar discovery.
   dashboard:
     enabled: false
-    # Sets the k8s-sidecar-target-directory annotation, which the Grafana
-    # sidecar uses to file the dashboard under this folder. Assumes the
-    # sidecar's watched base directory is its default, "/tmp/dashboards"
-    # (sidecarBaseDir below) — override if your Grafana release configured
-    # sidecar.dashboards.folder to something else.
+    # k8s-sidecar-target-directory folder, relative to sidecarBaseDir (the sidecar's watched directory).
     folder: "Security"
     sidecarBaseDir: "/tmp/dashboards"
     additionalLabels: {}
 
 metrics:
+  # Exported by the leader dashboard replica; metric names, labels and alerting advice are in docs/architecture.md.
+
   # ServiceMonitor CRD — requires Prometheus Operator.
   serviceMonitor:
     enabled: false
@@ -147,11 +183,7 @@ metrics:
   # PrometheusRule CRD — generates alert rules routed to Alertmanager.
   prometheusRule:
     enabled: false
-    # Each entry becomes one rule.  Scope is matched against the metric label;
-    # severity is emitted as a label for Alertmanager routing.
-    # "unknown" covers non-semver-pinned dependencies (e.g. git SHAs) whose
-    # bump size can't be classified — treated as warning since it could be
-    # anything up to a major change.
+    # One rule per scope (matched on the metric label); "unknown" bumps cannot be classified, so they warn.
     rules:
       - scope: major
         severity: warning
@@ -162,12 +194,18 @@ metrics:
       - scope: unknown
         severity: warning
 
-    # Scan-staleness rule — fires when the last successful scan is older than
-    # thresholdSeconds. Catches a down or persistently failing scanner.
-    # Partially failed scans (some repos failed) still count as successful.
-    # Not evaluated before the first successful scan (no metric series yet).
-    # Keep thresholdSeconds comfortably larger than the scan interval in
-    # scanner.schedule (default: daily → 30h).
+    # Fires when the newest successful repository scan is older than thresholdSeconds; keep it above the schedule interval.
     staleScan:
       enabled: true
       thresholdSeconds: 108000
+    # Fires while a repository's latest scan failed; its previous results stay visible, this rule says they are stale.
+    scanFailed:
+      enabled: true
+      severity: warning
+      for: 10m
+    # Fires when an image digest moved since the previous scan; keep `for` well below the schedule interval.
+    digestDrift:
+      enabled: true
+      severity: warning
+      for: 1m
+

@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/google/go-containerregistry/pkg/authn"
-	"github.com/google/go-containerregistry/pkg/v1/remote"
+
+	"github.com/yuriy-kovalchuk/yk-update-checker/internal/errkind"
 )
 
 func TestGetOrFetchDeduplicatesConcurrentFetches(t *testing.T) {
@@ -24,12 +24,8 @@ func TestGetOrFetchDeduplicatesConcurrentFetches(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	oldClient := httpClient
-	httpClient = ts.Client()
-	defer func() { httpClient = oldClient }()
-
 	repoURL := strings.TrimPrefix(ts.URL, "https://")
-	cache := NewIndexCache(0)
+	cache := NewIndexCache(withHTTPClient(ts.Client()))
 
 	var wg sync.WaitGroup
 	for range 10 {
@@ -60,100 +56,12 @@ func TestLatestOverPlainHTTP(t *testing.T) {
 	defer ts.Close()
 
 	repoURL := strings.TrimPrefix(ts.URL, "http://")
-	latest, err := Latest(context.Background(), NewIndexCache(0), "http", repoURL, "app", "1.0.0", ScopeAll)
+	latest, err := Latest(context.Background(), NewIndexCache(), "http", repoURL, "app", "1.0.0", ScopeAll)
 	if err != nil {
 		t.Fatalf("Latest over http: %v", err)
 	}
 	if latest != "2.0.0" {
 		t.Errorf("latest = %q, want 2.0.0", latest)
-	}
-}
-
-func TestCacheTTLExpiresEntries(t *testing.T) {
-	var calls atomic.Int32
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls.Add(1)
-		_, _ = w.Write([]byte("entries:\n  app:\n  - version: 1.2.3\n"))
-	}))
-	defer ts.Close()
-
-	repoURL := strings.TrimPrefix(ts.URL, "http://")
-	cache := NewIndexCache(40 * time.Millisecond)
-
-	latest, err := Latest(context.Background(), cache, "http", repoURL, "app", "1.0.0", ScopeAll)
-	if err != nil {
-		t.Fatalf("Latest: %v", err)
-	}
-	if latest != "1.2.3" {
-		t.Errorf("latest = %q, want 1.2.3", latest)
-	}
-
-	// Within the TTL: served from cache, no new fetch.
-	if _, err := Latest(context.Background(), cache, "http", repoURL, "app", "1.0.0", ScopeAll); err != nil {
-		t.Fatalf("Latest (cached): %v", err)
-	}
-	if got := calls.Load(); got != 1 {
-		t.Fatalf("index fetched %d times within TTL, want 1", got)
-	}
-
-	// Past the TTL: re-fetched.
-	time.Sleep(60 * time.Millisecond)
-	if _, err := Latest(context.Background(), cache, "http", repoURL, "app", "1.0.0", ScopeAll); err != nil {
-		t.Fatalf("Latest (expired): %v", err)
-	}
-	if got := calls.Load(); got != 2 {
-		t.Errorf("index fetched %d times after TTL expiry, want 2", got)
-	}
-}
-
-func TestCacheTTLZeroNeverExpires(t *testing.T) {
-	var calls atomic.Int32
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls.Add(1)
-		_, _ = w.Write([]byte("entries:\n  app:\n  - version: 1.2.3\n"))
-	}))
-	defer ts.Close()
-
-	repoURL := strings.TrimPrefix(ts.URL, "http://")
-	cache := NewIndexCache(0)
-
-	for range 2 {
-		time.Sleep(10 * time.Millisecond)
-		if _, err := Latest(context.Background(), cache, "http", repoURL, "app", "1.0.0", ScopeAll); err != nil {
-			t.Fatalf("Latest: %v", err)
-		}
-	}
-	if got := calls.Load(); got != 1 {
-		t.Errorf("index fetched %d times with TTL 0, want 1 (entries never expire)", got)
-	}
-}
-
-func TestExpiredErrorIsRefetched(t *testing.T) {
-	// A registry that fails once and then recovers: the negative cache entry
-	// must expire too, so a later scan succeeds.
-	var calls atomic.Int32
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if calls.Add(1) == 1 {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		_, _ = w.Write([]byte("entries:\n  app:\n  - version: 1.2.3\n"))
-	}))
-	defer ts.Close()
-
-	repoURL := strings.TrimPrefix(ts.URL, "http://")
-	cache := NewIndexCache(20 * time.Millisecond)
-
-	if _, err := Latest(context.Background(), cache, "http", repoURL, "app", "1.0.0", ScopeAll); err == nil {
-		t.Fatal("Latest: want error from failing registry, got nil")
-	}
-	time.Sleep(30 * time.Millisecond)
-	latest, err := Latest(context.Background(), cache, "http", repoURL, "app", "1.0.0", ScopeAll)
-	if err != nil {
-		t.Fatalf("Latest after recovery: %v", err)
-	}
-	if latest != "1.2.3" {
-		t.Errorf("latest = %q, want 1.2.3", latest)
 	}
 }
 
@@ -166,7 +74,7 @@ func TestFailedFetchIsNotRetriedWithinScan(t *testing.T) {
 	defer ts.Close()
 
 	repoURL := strings.TrimPrefix(ts.URL, "http://")
-	cache := NewIndexCache(0)
+	cache := NewIndexCache()
 	for range 3 {
 		if _, err := Latest(context.Background(), cache, "http", repoURL, "app", "1.0.0", ScopeAll); err == nil {
 			t.Fatal("Latest: want error from failing registry, got nil")
@@ -178,10 +86,6 @@ func TestFailedFetchIsNotRetriedWithinScan(t *testing.T) {
 }
 
 func TestIndexSizeLimit(t *testing.T) {
-	oldMax := maxIndexBytes
-	maxIndexBytes = 256
-	defer func() { maxIndexBytes = oldMax }()
-
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("entries:\n  app:\n"))
 		for range 100 {
@@ -191,19 +95,15 @@ func TestIndexSizeLimit(t *testing.T) {
 	defer ts.Close()
 
 	repoURL := strings.TrimPrefix(ts.URL, "http://")
-	_, err := Latest(context.Background(), NewIndexCache(0), "http", repoURL, "app", "1.0.0", ScopeAll)
+	cache := NewIndexCache(withLimits(func(l *limits) { l.indexBytes = 256 }))
+	_, err := Latest(context.Background(), cache, "http", repoURL, "app", "1.0.0", ScopeAll)
 	if err == nil || !strings.Contains(err.Error(), "size limit") {
 		t.Errorf("err = %v, want size limit error", err)
 	}
 }
 
 func TestOCITagsAreCached(t *testing.T) {
-	// Anonymous auth: the default keychain shells out to docker credential
-	// helpers, which can hang in test environments.
-	oldAuth := ociAuth
-	ociAuth = remote.WithAuth(authn.Anonymous)
-	defer func() { ociAuth = oldAuth }()
-
+	// Anonymous auth: the default keychain shells out to docker credential helpers, which can hang in test environments.
 	var tagCalls atomic.Int32
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v2/", func(w http.ResponseWriter, _ *http.Request) {
@@ -219,7 +119,7 @@ func TestOCITagsAreCached(t *testing.T) {
 
 	// go-containerregistry uses plain http for localhost registries.
 	host := "localhost:" + strings.Split(ts.Listener.Addr().String(), ":")[1]
-	cache := NewIndexCache(0)
+	cache := NewIndexCache(withAnonymousAuth())
 	for range 3 {
 		latest, err := Latest(context.Background(), cache, "oci", host+"/charts", "app", "1.0.0", ScopeAll)
 		if err != nil {
@@ -279,7 +179,7 @@ func TestLatestWithRangeVersion(t *testing.T) {
 	repoURL := strings.TrimPrefix(ts.URL, "http://")
 
 	// Scope all: deployed is 29.5.0 (newest matching 29.x), so 30.0.0 is an update.
-	latest, err := Latest(context.Background(), NewIndexCache(0), "http", repoURL, "prometheus-operator-crds", "29.x", ScopeAll)
+	latest, err := Latest(context.Background(), NewIndexCache(), "http", repoURL, "prometheus-operator-crds", "29.x", ScopeAll)
 	if err != nil {
 		t.Fatalf("Latest(29.x, all): %v", err)
 	}
@@ -288,7 +188,7 @@ func TestLatestWithRangeVersion(t *testing.T) {
 	}
 
 	// Scope minor: nothing newer within major 29 — up to date.
-	latest, err = Latest(context.Background(), NewIndexCache(0), "http", repoURL, "prometheus-operator-crds", "29.x", ScopeMinor)
+	latest, err = Latest(context.Background(), NewIndexCache(), "http", repoURL, "prometheus-operator-crds", "29.x", ScopeMinor)
 	if err != nil {
 		t.Fatalf("Latest(29.x, minor): %v", err)
 	}
@@ -318,5 +218,122 @@ func TestLatestFromTags(t *testing.T) {
 		if got := latestFromTags(current, tags, tc.scope); got != tc.want {
 			t.Errorf("latestFromTags(%s, scope=%s) = %q, want %q", tc.current, tc.scope, got, tc.want)
 		}
+	}
+}
+
+// TestGetOrDoDoesNotShareKeysAcrossStores covers B8: one group, two stores, no shared in-flight call.
+func TestGetOrDoDoesNotShareKeysAcrossStores(t *testing.T) {
+	c := NewIndexCache()
+	const key = "registry.example.com/app|sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+	entered := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, err := getOrDo(context.Background(), c, "tag-info", c.imgInfos, key, func(context.Context) (tagInfo, error) {
+			close(entered)
+			// Long enough for the second caller to arrive while this call is still in flight, which is the only moment singleflight can share it.
+			time.Sleep(300 * time.Millisecond)
+			return tagInfo{Digest: "sha256:aaa"}, nil
+		}); err != nil {
+			t.Errorf("tag-info: %v", err)
+		}
+	}()
+
+	<-entered // the tag-info call is registered under its key and in flight
+	n, err := getOrDo(context.Background(), c, "referrers", c.imgRefs, key, func(context.Context) (int, error) {
+		return 7, nil
+	})
+	<-done
+
+	if err != nil {
+		t.Fatalf("referrers: %v", err)
+	}
+	if n != 7 {
+		t.Errorf("referrers = %d, want 7 — its own fetch, not the tag-info call's result", n)
+	}
+}
+
+// TestScopeMajorBehavesAsScopeAll pins the documented contract: `update_type: major` is an alias of `all`, not a major-bumps-only filter.
+func TestScopeMajorBehavesAsScopeAll(t *testing.T) {
+	cases := []struct {
+		current string
+		tags    []string
+	}{
+		{"1.2.3", []string{"2.0.0", "1.3.0", "1.2.4"}},
+		{"2.4.0", []string{"2.4.1", "3.1.0", "2.5.0"}},
+		{"1.0.0", []string{"1.0.1"}},
+	}
+	for _, c := range cases {
+		cur, err := semver.NewVersion(c.current)
+		if err != nil {
+			t.Fatalf("semver.NewVersion(%q): %v", c.current, err)
+		}
+		all := latestFromTags(cur, c.tags, ScopeAll)
+		major := latestFromTags(cur, c.tags, ScopeMajor)
+		if all != major {
+			t.Errorf("scope major yielded %q where all yielded %q (tags %v from %s): the docs promise these are the same", major, all, c.tags, c.current)
+		}
+		if all == "" {
+			t.Errorf("no candidate for %s from %v", c.current, c.tags)
+		}
+	}
+}
+
+// TestErrorsCarryKinds: every failure Latest reports is classified, so the dashboard can say "auth failed" or "not found" instead of a raw string.
+func TestErrorsCarryKinds(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/private/index.yaml":
+			w.WriteHeader(http.StatusUnauthorized)
+		case "/throttled/index.yaml":
+			w.WriteHeader(http.StatusTooManyRequests)
+		case "/ok/index.yaml":
+			_, _ = w.Write([]byte("entries:\n  app:\n  - version: 1.0.0\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+	host := strings.TrimPrefix(ts.URL, "http://")
+
+	cases := []struct {
+		repo, chart, version string
+		want                 errkind.Kind
+	}{
+		{host + "/private", "app", "1.0.0", errkind.Auth},
+		{host + "/throttled", "app", "1.0.0", errkind.RateLimited},
+		{host + "/missing", "app", "1.0.0", errkind.NotFound},
+		{host + "/ok", "other", "1.0.0", errkind.NotFound}, // chart not in the index
+		{host + "/ok", "app", "not-a-version", errkind.InvalidVersion},
+		{"127.0.0.1:1/none", "app", "1.0.0", errkind.Unreachable},
+	}
+	for _, tc := range cases {
+		_, err := Latest(context.Background(), NewIndexCache(), "http", tc.repo, tc.chart, tc.version, ScopeAll)
+		if got := errkind.Of(err); got != tc.want {
+			t.Errorf("%s %s@%s: kind = %q (%v), want %q", tc.repo, tc.chart, tc.version, got, err, tc.want)
+		}
+	}
+	if _, err := Latest(context.Background(), NewIndexCache(), "git", host, "app", "1.0.0", ScopeAll); errkind.Of(err) != errkind.Unsupported {
+		t.Errorf("unsupported protocol: kind = %q, want unsupported", errkind.Of(err))
+	}
+}
+
+func TestImageErrorsCarryKinds(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v2/", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	mux.HandleFunc("/v2/private/app/", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	host := "localhost:" + strings.Split(ts.Listener.Addr().String(), ":")[1]
+
+	cache := NewIndexCache(withAnonymousAuth())
+	if _, err := cache.LatestImage(context.Background(), host+"/private/app", "1.0.0", "", ScopeAll); errkind.Of(err) != errkind.Auth {
+		t.Errorf("403 from the registry: kind = %q (%v), want auth", errkind.Of(err), err)
+	}
+	if _, err := cache.LatestImage(context.Background(), "127.0.0.1:1/app", "1.0.0", "", ScopeAll); errkind.Of(err) != errkind.Unreachable {
+		t.Errorf("closed port: kind = %q (%v), want unreachable", errkind.Of(err), err)
 	}
 }

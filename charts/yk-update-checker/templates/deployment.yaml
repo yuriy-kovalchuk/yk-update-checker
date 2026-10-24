@@ -1,3 +1,26 @@
+{{- /* The dashboard only reads the reports and starts scans, so it mounts nothing and can run more than one replica. */ -}}
+{{- $args := list "dashboard" "--mode=kubernetes" "--port=8080"
+      (printf "--cronjob=%s" (include "yk-update-checker.scannerName" .))
+      (printf "--lease=%s" (include "yk-update-checker.leaseName" .)) -}}
+{{- $extra := `ports:
+  - name: http
+    containerPort: 8080
+    protocol: TCP
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 30
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10` -}}
+{{- $container := dict "root" . "name" "update-checker" "args" $args "scans" false
+      "extraEnv" .Values.extraEnv "security" .Values.containerSecurityContext
+      "resources" .Values.resources "extra" $extra -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -16,56 +39,14 @@ spec:
         app.kubernetes.io/component: dashboard
     spec:
       serviceAccountName: {{ include "yk-update-checker.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
-        - name: update-checker
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          args:
-            - serve
-            - --port=8080
-            - --config=/etc/update-checker/config.yaml
-            - --cronjob={{ include "yk-update-checker.fullname" . }}-scanner
-          ports:
-            - name: http
-              containerPort: 8080
-              protocol: TCP
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: 5
-            periodSeconds: 30
-          readinessProbe:
-            httpGet:
-              path: /ready
-              port: http
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          volumeMounts:
-            - name: config
-              mountPath: /etc/update-checker
-              readOnly: true
-          env:
-            # Keep the Go heap under the container limit so the GC works harder
-            # near the limit instead of the kernel OOMKilling the pod mid-scan.
-            - name: GOMEMLIMIT
-              valueFrom:
-                resourceFieldRef:
-                  containerName: update-checker
-                  resource: limits.memory
-            {{- with .Values.extraEnv }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
-          securityContext:
-            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
-          resources:
-            {{- toYaml .Values.resources | nindent 12 }}
-      volumes:
-        - name: config
-          configMap:
-            name: {{ include "yk-update-checker.fullname" . }}-config
+        {{- include "yk-update-checker.container" $container | nindent 8 }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

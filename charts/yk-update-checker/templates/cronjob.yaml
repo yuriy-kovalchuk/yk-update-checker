@@ -1,18 +1,35 @@
+{{- /* The scan writes its reports as custom resources, so it does use the API — as the scanner ServiceAccount, which can only touch the two report kinds. */ -}}
+{{- $creds := mustFromJson (include "yk-update-checker.repoCreds" .) -}}
+{{- $registry := mustFromJson (include "yk-update-checker.registryAuth" .) -}}
+{{- include "yk-update-checker.requireCredFsGroup" (dict "creds" (or $creds $registry) "fsGroup" .Values.scanner.podSecurityContext.fsGroup "who" "scanner.podSecurityContext (scan CronJob)") -}}
+{{- $args := list "scan" "--config=/etc/update-checker/config.yaml" "--store=kubernetes"
+      (printf "--history=%v" .Values.scanner.history.runs)
+      (printf "--lock=%s" (include "yk-update-checker.scanLeaseName" .))
+      (printf "--instance=%s" .Release.Name) -}}
+{{- $container := dict "root" . "name" "scanner" "args" $args "scans" true "creds" $creds "registry" $registry
+      "extraEnv" .Values.scanner.extraEnv "security" .Values.scanner.containerSecurityContext
+      "resources" .Values.scanner.resources -}}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: {{ include "yk-update-checker.fullname" . }}-scanner
+  name: {{ include "yk-update-checker.scannerName" . }}
   labels:
     {{- include "yk-update-checker.labels" . | nindent 4 }}
     app.kubernetes.io/component: scanner
 spec:
   schedule: {{ .Values.scanner.schedule | quote }}
   suspend: {{ .Values.scanner.suspend }}
+  # A schedule the controller could not start within this window is recorded as missed, not vanished.
+  startingDeadlineSeconds: {{ .Values.scanner.startingDeadlineSeconds }}
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 1
   jobTemplate:
     spec:
+      # One attempt per schedule: a retry re-clones every repository and appends another entry to each RepositoryScan's history.
+      backoffLimit: 0
+      # Backstop for what the process cannot stop itself (a wedged subprocess); the manual trigger copies this JobSpec, so it is bounded the same way.
+      activeDeadlineSeconds: {{ .Values.scanner.activeDeadlineSeconds }}
       template:
         metadata:
           labels:
@@ -22,42 +39,12 @@ spec:
           securityContext:
             {{- toYaml .Values.scanner.podSecurityContext | nindent 12 }}
           restartPolicy: Never
-          serviceAccountName: {{ include "yk-update-checker.serviceAccountName" . }}
+          serviceAccountName: {{ include "yk-update-checker.scannerServiceAccountName" . }}
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           containers:
-            - name: scanner
-              image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
-              imagePullPolicy: {{ .Values.image.pullPolicy }}
-              args:
-                - scan
-                - --config=/etc/update-checker/config.yaml
-                - --server-url=http://{{ include "yk-update-checker.fullname" . }}:{{ .Values.service.port }}
-              volumeMounts:
-                - name: config
-                  mountPath: /etc/update-checker
-                  readOnly: true
-                - name: scanner-tmp
-                  mountPath: /tmp
-              env:
-                - name: SCAN_TRIGGER
-                  value: scheduled
-                # Keep the Go heap under the container limit so the GC works
-                # harder near the limit instead of the kernel OOMKilling the
-                # scan partway through.
-                - name: GOMEMLIMIT
-                  valueFrom:
-                    resourceFieldRef:
-                      containerName: scanner
-                      resource: limits.memory
-                {{- with .Values.scanner.extraEnv }}
-                {{- toYaml . | nindent 16 }}
-                {{- end }}
-              securityContext:
-                {{- toYaml .Values.scanner.containerSecurityContext | nindent 16 }}
-              resources:
-                {{- toYaml .Values.scanner.resources | nindent 16 }}
+            {{- include "yk-update-checker.container" $container | nindent 12 }}
           volumes:
-            - name: config
-              configMap:
-                name: {{ include "yk-update-checker.fullname" . }}-config
-            - name: scanner-tmp
-              emptyDir: {}
+            {{- include "yk-update-checker.podVolumes" $container | nindent 12 }}

@@ -13,8 +13,5 @@ var ErrAlreadyRunning = errors.New("scan already running")
 type Trigger interface {
 	Trigger(ctx context.Context) error
 	Available() bool
-	// Running reports whether a scan started through this trigger is still in
-	// progress. Triggers that run scans in-process may return false and let the
-	// caller track its own scan state.
-	Running(ctx context.Context) bool
+	Running(ctx context.Context) bool // a scan started through this trigger is still in progress
 }

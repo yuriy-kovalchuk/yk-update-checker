@@ -13,4 +13,20 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "yk-update-checker.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "yk-update-checker.scannerServiceAccountName" . }}
+  labels:
+    {{- include "yk-update-checker.labels" . | nindent 4 }}
+    app.kubernetes.io/component: scanner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "yk-update-checker.scannerServiceAccountName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "yk-update-checker.scannerServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
 {{- end }}

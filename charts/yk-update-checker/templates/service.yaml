@@ -4,8 +4,7 @@ metadata:
   name: {{ include "yk-update-checker.fullname" . }}
   labels:
     {{- include "yk-update-checker.labels" . | nindent 4 }}
-    # ServiceMonitor spec.selector matches against Service metadata.labels (not
-    # spec.selector), so we need this label here in addition to spec.selector.
+    # ServiceMonitor selects on Service labels, not spec.selector.
     app.kubernetes.io/component: dashboard
 spec:
   type: {{ .Values.service.type }}
@@ -16,6 +15,5 @@ spec:
       protocol: TCP
   selector:
     {{- include "yk-update-checker.selectorLabels" . | nindent 4 }}
-    # Scanner Job pods share the selector labels; without this the Service
-    # also routes to them and connections are refused mid-scan.
+    # Scanner pods share the selector labels; this keeps the Service off them.
     app.kubernetes.io/component: dashboard

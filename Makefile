@@ -1,129 +1,50 @@
-.PHONY: all build run run-scan test test-cover fmt vet lint tidy deps-check vuln \
-        docker-build docker-push buildx-setup \
-        clean install-hooks help
+.PHONY: build run test lint chart-creds kind docker-build docker-push install-hooks
 
-# ── Variables ─────────────────────────────────────────────────────────────────
+CONFIG       ?= examples/config.yaml
+IMAGE        ?= ghcr.io/yuriy-kovalchuk/yk-update-checker
+VERSION      ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+PLATFORMS    ?= linux/amd64,linux/arm64
+TAG_LATEST   ?= false
+KIND_CLUSTER ?= update-checker
+VALUES       ?= examples/test-values.yaml
+GIT_COMMIT   := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+BUILD_DATE   := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+VERSION_PKG  := github.com/yuriy-kovalchuk/yk-update-checker/internal/version
+LDFLAGS      := -s -w -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(GIT_COMMIT) -X $(VERSION_PKG).BuildDate=$(BUILD_DATE)
 
-CONFIG     ?= examples/config.yaml
-LOCALBIN   ?= $(shell pwd)/bin
-IMAGE      ?= ghcr.io/yuriy-kovalchuk/yk-update-checker
-VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-PLATFORMS  ?= linux/amd64,linux/arm64
-GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
-BUILD_DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-VERSION_PKG := github.com/yuriy-kovalchuk/yk-update-checker/internal/version
-LDFLAGS    := -s -w \
-  -X $(VERSION_PKG).Version=$(VERSION) \
-  -X $(VERSION_PKG).Commit=$(GIT_COMMIT) \
-  -X $(VERSION_PKG).BuildDate=$(BUILD_DATE)
+build: ## compile bin/update-checker
+	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o bin/update-checker ./cmd/update-checker
 
-# ── Default ───────────────────────────────────────────────────────────────────
+run: build ## local dashboard: reports in ./data, scans as child processes
+	bin/update-checker dashboard --mode=local --config $(CONFIG) --verbose
 
-all: tidy fmt vet lint build
-
-# ── Code quality ──────────────────────────────────────────────────────────────
-
-## fmt: format all Go source files
-fmt:
-	go fmt ./...
-
-## vet: run go vet
-vet:
-	go vet ./...
-
-## lint: run golangci-lint
-lint:
-	golangci-lint run ./...
-
-## tidy: tidy and verify go modules
-tidy:
-	go mod tidy
-	go mod verify
-
-## deps-check: list outdated direct dependencies
-deps-check:
-	@go list -u -m -f '{{if and (not .Indirect) .Update}}{{.Path}}  {{.Version}} → {{.Update.Version}}{{end}}' all \
-	  | grep -v "^$$" \
-	  || echo "All direct dependencies are up to date."
-
-## vuln: check for known CVEs in the dependency tree
-vuln:
-	govulncheck ./...
-
-# ── Test ──────────────────────────────────────────────────────────────────────
-
-## test: run all tests with race detector
-test:
+test: ## all tests with the race detector
 	go test -race -timeout 120s ./...
 
-## test-cover: run tests with coverage report
-test-cover:
-	go test -race -timeout 120s -coverprofile=coverage.out ./...
-	go tool cover -func=coverage.out
-	go tool cover -html=coverage.out -o coverage.html
-	@echo "Coverage report: coverage.html"
+lint: ## golangci-lint
+	golangci-lint run ./...
 
-# ── Build ─────────────────────────────────────────────────────────────────────
+chart-creds: ## render-time checks of the Helm chart
+	scripts/verify-chart-credentials.sh
 
-## build: compile the update-checker binary
-build:
-	mkdir -p $(LOCALBIN)
-	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(LOCALBIN)/update-checker ./cmd/update-checker
+kind: ## kind cluster (created if missing) + local image + chart with VALUES
+	kind get clusters | grep -qx $(KIND_CLUSTER) || kind create cluster --name $(KIND_CLUSTER)
+	docker build -t $(IMAGE):dev .
+	kind load docker-image $(IMAGE):dev --name $(KIND_CLUSTER)
+	helm upgrade --install yk-update-checker charts/yk-update-checker \
+	  --kube-context kind-$(KIND_CLUSTER) -n yk-update-checker --create-namespace \
+	  -f $(VALUES) --set image.repository=$(IMAGE) --set image.tag=dev --set image.pullPolicy=Never
 
-# ── Run ───────────────────────────────────────────────────────────────────────
+DOCKER_BUILD = docker buildx create --name multiplatform --driver docker-container --use >/dev/null 2>&1 || true; \
+	docker buildx build --builder multiplatform --platform $(PLATFORMS) \
+	  --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(GIT_COMMIT) --build-arg BUILD_DATE=$(BUILD_DATE) \
+	  -t $(IMAGE):$(VERSION) $(if $(filter true,$(TAG_LATEST)),-t $(IMAGE):latest)
 
-## run: build and run the dashboard (serve mode) with verbose logging
-run: build
-	$(LOCALBIN)/update-checker serve --config $(CONFIG) --verbose
+docker-build: ## multi-arch image, not pushed
+	$(DOCKER_BUILD) .
 
-## run-scan: build and run a single one-shot scan, print results to stdout
-run-scan: build
-	$(LOCALBIN)/update-checker scan --config $(CONFIG) --verbose
+docker-push: ## multi-arch image pushed to IMAGE
+	$(DOCKER_BUILD) --push .
 
-# ── Docker ────────────────────────────────────────────────────────────────────
-
-## buildx-setup: create or start the multi-platform buildx builder
-buildx-setup:
-	docker buildx create --name multiplatform --driver docker-container --bootstrap --use 2>/dev/null || \
-	  docker buildx inspect --bootstrap multiplatform
-
-## docker-build: build multi-arch image (does not push)
-docker-build: buildx-setup
-	docker buildx build \
-	  --builder multiplatform \
-	  --platform $(PLATFORMS) \
-	  --build-arg VERSION=$(VERSION) \
-	  --build-arg COMMIT=$(GIT_COMMIT) \
-	  --build-arg BUILD_DATE=$(BUILD_DATE) \
-	  -t $(IMAGE):$(VERSION) \
-	  -t $(IMAGE):latest \
-	  .
-
-## docker-push: build and push multi-arch image to GHCR
-docker-push: buildx-setup
-	docker buildx build \
-	  --builder multiplatform \
-	  --platform $(PLATFORMS) \
-	  --build-arg VERSION=$(VERSION) \
-	  --build-arg COMMIT=$(GIT_COMMIT) \
-	  --build-arg BUILD_DATE=$(BUILD_DATE) \
-	  -t $(IMAGE):$(VERSION) \
-	  -t $(IMAGE):latest \
-	  --push \
-	  .
-
-# ── Misc ──────────────────────────────────────────────────────────────────────
-
-## clean: remove build artefacts and coverage reports
-clean:
-	rm -rf bin/ coverage.out coverage.html
-
-## install-hooks: configure git to use .githooks/
-install-hooks:
-	git config core.hooksPath .githooks
-	chmod +x .githooks/*
-	@echo "Git hooks installed."
-
-## help: list available make targets
-help:
-	@grep -E '^## ' Makefile | sed 's/^## //' | column -t -s ':'
+install-hooks: ## use .githooks/ for commit-message and pre-push checks
+	git config core.hooksPath .githooks && chmod +x .githooks/*

@@ -1,78 +1,136 @@
-// Package dashboard serves the web UI and read-only API endpoints.
+// Package dashboard serves the web UI, the read-only API and the scan trigger.
 package dashboard
 
 import (
 	"embed"
-	"encoding/json"
+	"errors"
+	"io/fs"
 	"log/slog"
 	"net/http"
+	"strings"
+	"time"
 
-	"github.com/yuriy-kovalchuk/yk-update-checker/internal/scan"
+	"github.com/yuriy-kovalchuk/yk-update-checker/internal/errkind"
+	"github.com/yuriy-kovalchuk/yk-update-checker/internal/middleware"
+	"github.com/yuriy-kovalchuk/yk-update-checker/internal/report"
+	"github.com/yuriy-kovalchuk/yk-update-checker/internal/trigger"
+	"github.com/yuriy-kovalchuk/yk-update-checker/internal/version"
 )
 
 //go:embed ui
 var uiFS embed.FS
 
-// Handler serves the dashboard UI and result/status endpoints.
+var (
+	uiSub    = mustSub(uiFS, "ui")
+	fontsSub = mustSub(uiFS, "ui/fonts")
+)
+
+func mustSub(f embed.FS, dir string) fs.FS {
+	sub, err := fs.Sub(f, dir)
+	if err != nil {
+		panic("dashboard: embedded " + dir + " is missing: " + err.Error())
+	}
+	return sub
+}
+
+// Handler serves what the latest report snapshot says and starts scans.
 type Handler struct {
-	svc scan.Service
+	Snapshot func() report.Snapshot
+	Trigger  trigger.Trigger
+	Metrics  http.Handler // mounted at /metrics when set
 }
 
-// NewHandler creates a new dashboard Handler.
-func NewHandler(svc scan.Service) *Handler {
-	return &Handler{svc: svc}
-}
-
-// RegisterRoutes wires dashboard endpoints onto the mux.
+// RegisterRoutes wires the dashboard endpoints onto the mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /{$}", h.ui)
-	mux.HandleFunc("GET /favicon.svg", h.favicon)
+	mux.HandleFunc("GET /{$}", serveUI("index.html"))
+	mux.HandleFunc("GET /favicon.svg", serveUI("favicon.svg"))
 	mux.HandleFunc("GET /api/results", h.results)
 	mux.HandleFunc("GET /api/status", h.status)
+	mux.HandleFunc("POST /api/scan/trigger", h.trigger)
+	if h.Metrics != nil {
+		mux.Handle("GET /metrics", h.Metrics)
+	}
+	mux.Handle("GET /assets/", cached("no-cache", http.StripPrefix("/assets/", http.FileServerFS(uiSub))))
+	mux.Handle("GET /fonts/", cached("public, max-age=604800, immutable", http.StripPrefix("/fonts/", http.FileServerFS(fontsSub))))
 }
 
-func (h *Handler) ui(w http.ResponseWriter, _ *http.Request) {
-	data, err := uiFS.ReadFile("ui/index.html")
-	if err != nil {
-		http.Error(w, "UI not found", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if _, err := w.Write(data); err != nil {
-		slog.Error("serve UI write failed", "error", err)
-	}
+func serveUI(name string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) { http.ServeFileFS(w, r, uiSub, name) }
 }
 
-func (h *Handler) favicon(w http.ResponseWriter, _ *http.Request) {
-	data, err := uiFS.ReadFile("ui/favicon.svg")
-	if err != nil {
-		http.Error(w, "favicon not found", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "image/svg+xml")
-	if _, err := w.Write(data); err != nil {
-		slog.Error("serve favicon write failed", "error", err)
-	}
+func cached(cacheControl string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", cacheControl)
+		next.ServeHTTP(w, r)
+	})
 }
 
-func (h *Handler) results(w http.ResponseWriter, r *http.Request) {
-	results, err := h.svc.GetResults(r.Context())
-	if err != nil {
-		slog.Error("get results failed", "error", err)
-		http.Error(w, "failed to get results", http.StatusInternalServerError)
-		return
+func (h *Handler) results(w http.ResponseWriter, _ *http.Request) {
+	deps := h.Snapshot().Deps
+	out := make([]report.DepStatus, len(deps))
+	for i, d := range deps {
+		out[i] = d.Status
 	}
-	writeJSON(w, http.StatusOK, results)
+	middleware.WriteJSON(w, http.StatusOK, out)
+}
+
+// FailedRepo is a repository whose latest scan failed.
+type FailedRepo struct {
+	Repo    string       `json:"repo"`
+	Kind    errkind.Kind `json:"kind"`
+	Message string       `json:"message"`
+}
+
+// Status is what the UI polls.
+type Status struct {
+	Scanning         bool         `json:"scanning"`
+	TriggerAvailable bool         `json:"trigger_available"`
+	LastScanAt       *time.Time   `json:"last_scan_at,omitempty"`
+	ResultCount      int          `json:"result_count"`
+	LastError        string       `json:"last_error,omitempty"`
+	LastErrorKind    errkind.Kind `json:"last_error_kind,omitempty"`
+	RepoErrors       []FailedRepo `json:"repo_errors,omitempty"`
+	Version          string       `json:"version"`
 }
 
 func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, h.svc.GetStatus(r.Context()))
+	snap := h.Snapshot()
+	st := Status{
+		Scanning:         h.Trigger.Running(r.Context()),
+		TriggerAvailable: h.Trigger.Available(),
+		ResultCount:      len(snap.Deps),
+		Version:          version.Version,
+	}
+	var msgs []string
+	for _, rs := range snap.Repos {
+		if t := rs.Status.LastScanTime; st.LastScanAt == nil || t.After(*st.LastScanAt) {
+			st.LastScanAt = &t
+		}
+		if e := rs.Status.Error; e != nil {
+			st.RepoErrors = append(st.RepoErrors, FailedRepo{Repo: rs.Status.Repo, Kind: e.Kind, Message: e.Message})
+			msgs = append(msgs, "repo "+rs.Status.Repo+": "+e.Message)
+			if st.LastErrorKind == "" {
+				st.LastErrorKind = e.Kind
+			}
+		}
+	}
+	st.LastError = strings.Join(msgs, "\n")
+	middleware.WriteJSON(w, http.StatusOK, st)
 }
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(v); err != nil {
-		slog.Error("json encode failed", "error", err)
+func (h *Handler) trigger(w http.ResponseWriter, r *http.Request) {
+	if !h.Trigger.Available() {
+		http.Error(w, "trigger not available", http.StatusServiceUnavailable)
+		return
+	}
+	err := h.Trigger.Trigger(r.Context())
+	switch {
+	case errors.Is(err, trigger.ErrAlreadyRunning):
+		middleware.WriteJSON(w, http.StatusConflict, map[string]string{"status": "already_running"})
+	case err != nil:
+		slog.Error("trigger scan failed", "error", err)
+		http.Error(w, "failed to trigger scan", http.StatusInternalServerError)
+	default:
+		middleware.WriteJSON(w, http.StatusAccepted, map[string]string{"status": "triggered"})
 	}
 }

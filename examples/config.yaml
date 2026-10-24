@@ -7,3 +7,7 @@ repos:
   # Public repository — no auth required
   - name: homelab
     repo: https://github.com/yuriy-kovalchuk/homelab
+
+  # This project's own repo: its multi-stage Dockerfile exercises the Dockerfile checks.
+  - name: update-checker
+    repo: https://github.com/yuriy-kovalchuk/yk-update-checker

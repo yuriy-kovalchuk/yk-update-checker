@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -14,12 +15,7 @@ import (
 )
 
 func newTestKubernetes(objs ...runtime.Object) *Kubernetes {
-	return &Kubernetes{
-		client:      fake.NewClientset(objs...),
-		namespace:   "ns",
-		cronJobName: "scanner",
-		available:   true,
-	}
+	return NewKubernetes(fake.NewClientset(objs...), "ns", "scanner")
 }
 
 func testCronJob() *batchv1.CronJob {
@@ -42,7 +38,7 @@ func manualJob(name string, conditions ...batchv1.JobCondition) *batchv1.Job {
 func TestTriggerCreatesJob(t *testing.T) {
 	kt := newTestKubernetes(testCronJob())
 
-	name, err := kt.Trigger(context.Background())
+	name, err := kt.createJob(context.Background())
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
@@ -67,7 +63,7 @@ func TestTriggerRefusedWhileScheduledJobActive(t *testing.T) {
 	cj.Status.Active = []corev1.ObjectReference{{Name: "scanner-29200000"}}
 	kt := newTestKubernetes(cj)
 
-	if _, err := kt.Trigger(context.Background()); !errors.Is(err, ErrAlreadyRunning) {
+	if _, err := kt.createJob(context.Background()); !errors.Is(err, ErrAlreadyRunning) {
 		t.Fatalf("err = %v, want ErrAlreadyRunning", err)
 	}
 }
@@ -75,7 +71,7 @@ func TestTriggerRefusedWhileScheduledJobActive(t *testing.T) {
 func TestTriggerRefusedWhileManualJobActive(t *testing.T) {
 	kt := newTestKubernetes(testCronJob(), manualJob("scanner-manual-1"))
 
-	if _, err := kt.Trigger(context.Background()); !errors.Is(err, ErrAlreadyRunning) {
+	if _, err := kt.createJob(context.Background()); !errors.Is(err, ErrAlreadyRunning) {
 		t.Fatalf("err = %v, want ErrAlreadyRunning", err)
 	}
 }
@@ -86,7 +82,7 @@ func TestTriggerAllowedAfterManualJobFinished(t *testing.T) {
 	})
 	kt := newTestKubernetes(testCronJob(), done)
 
-	if _, err := kt.Trigger(context.Background()); err != nil {
+	if _, err := kt.createJob(context.Background()); err != nil {
 		t.Fatalf("Trigger after finished job: %v", err)
 	}
 }
@@ -94,10 +90,10 @@ func TestTriggerAllowedAfterManualJobFinished(t *testing.T) {
 func TestSecondTriggerRefused(t *testing.T) {
 	kt := newTestKubernetes(testCronJob())
 
-	if _, err := kt.Trigger(context.Background()); err != nil {
+	if _, err := kt.createJob(context.Background()); err != nil {
 		t.Fatalf("first Trigger: %v", err)
 	}
-	if _, err := kt.Trigger(context.Background()); !errors.Is(err, ErrAlreadyRunning) {
+	if _, err := kt.createJob(context.Background()); !errors.Is(err, ErrAlreadyRunning) {
 		t.Fatalf("second Trigger err = %v, want ErrAlreadyRunning", err)
 	}
 }
@@ -108,7 +104,7 @@ func TestRunning(t *testing.T) {
 		t.Error("Running = true with no jobs")
 	}
 
-	if _, err := kt.Trigger(context.Background()); err != nil {
+	if _, err := kt.createJob(context.Background()); err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
 	if !kt.Running(context.Background()) {
@@ -121,5 +117,46 @@ func TestRunning(t *testing.T) {
 	kt2 := newTestKubernetes(testCronJob(), failed)
 	if kt2.Running(context.Background()) {
 		t.Error("Running = true with only finished jobs")
+	}
+}
+
+func TestManualJobNameFitsTheLabelLimit(t *testing.T) {
+	now := time.Unix(1761319999, 0)
+	if got := manualJobName("yk-update-checker-scanner", now); got != "yk-update-checker-scanner-manual-1761319999" {
+		t.Errorf("short name changed: %q", got)
+	}
+	long := strings.Repeat("a", 43) + "-b-scanner" // 52, the CronJob maximum
+	got := manualJobName(long, now)
+	if len(got) > 63 || strings.Contains(got, "--") {
+		t.Errorf("manualJobName(%d chars) = %q (%d chars), want <= 63 and no empty segment", len(long), got, len(got))
+	}
+}
+
+func TestUnavailableWithoutCronJob(t *testing.T) {
+	if !newTestKubernetes(testCronJob()).Available() {
+		t.Error("unavailable with the CronJob present")
+	}
+	if newTestKubernetes().Available() {
+		t.Error("available with no CronJob to create Jobs from")
+	}
+}
+
+// TestRunningIsCached (B10): dashboard polls must not each cost a Get and a List against the API server.
+func TestRunningIsCached(t *testing.T) {
+	kt := newTestKubernetes(testCronJob())
+	client := kt.client.(*fake.Clientset)
+	client.ClearActions() // ignore the startup check
+	for range 5 {
+		kt.Running(context.Background())
+	}
+	if n := len(client.Actions()); n != 2 { // one Get cronjob + one List jobs
+		t.Errorf("5 Running calls made %d API calls, want 2 (one uncached answer)", n)
+	}
+	// A trigger is news: the next poll must say "scanning" without waiting out the cache.
+	if _, err := kt.createJob(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !kt.Running(context.Background()) {
+		t.Error("Running = false right after a trigger")
 	}
 }

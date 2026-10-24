@@ -1,5 +1,7 @@
 {{- $stale := .Values.metrics.prometheusRule.staleScan }}
-{{- if and .Values.metrics.prometheusRule.enabled (or .Values.metrics.prometheusRule.rules $stale.enabled) }}
+{{- $scan := .Values.metrics.prometheusRule.scanFailed }}
+{{- $drift := .Values.metrics.prometheusRule.digestDrift }}
+{{- if and .Values.metrics.prometheusRule.enabled (or .Values.metrics.prometheusRule.rules $stale.enabled $scan.enabled $drift.enabled) }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -33,5 +35,46 @@ spec:
           annotations:
             summary: 'No successful update-checker scan for over {{ $stale.thresholdSeconds }}s'
             description: 'The last successful scan is older than {{ $stale.thresholdSeconds }}s - the scanner may be down or failing.'
+        # last_scan_time comes from the RepositoryScan resources, so it survives a dashboard restart and is absent only while no scan has ever succeeded.
+        - alert: UpdateCheckerNoSuccessfulScan
+          expr: 'absent(update_checker_last_scan_time{namespace="{{ .Release.Namespace }}"})'
+          for: {{ $stale.thresholdSeconds }}s
+          labels:
+            severity: warning
+          annotations:
+            summary: 'No successful update-checker scan recorded in {{ .Release.Namespace }} for {{ $stale.thresholdSeconds }}s'
+            description: 'No repository scan has succeeded since the reports were created - check the scanner Job logs and /api/status.'
+        {{- end }}
+        {{- if $scan.enabled }}
+        # A failed scan keeps the repository's previous results, so the outdated alerts look unchanged; this is what says the data is stale.
+        - alert: UpdateCheckerRepositoryScanFailed
+          expr: 'update_checker_repository_scan_failed == 1'
+          for: {{ $scan.for }}
+          labels:
+            severity: {{ $scan.severity }}
+          annotations:
+            summary: >-
+              The latest scan of {{ "{{" }} $labels.source {{ "}}" }} failed
+              ({{ "{{" }} $labels.kind {{ "}}" }})
+            description: >-
+              Cloning or reading this repository failed, so its reported dependencies are
+              from the last scan that succeeded. See /api/status for the message.
+        {{- end }}
+        {{- if $drift.enabled }}
+        # A drift series lives one scan interval, so `for` must stay well below the schedule.
+        - alert: UpdateCheckerDigestDrift
+          expr: 'update_checker_dependency_digest_drift > 0'
+          for: {{ $drift.for }}
+          labels:
+            severity: {{ $drift.severity }}
+          annotations:
+            summary: >-
+              Image digest moved for {{ "{{" }} $labels.source {{ "}}" }} /
+              {{ "{{" }} $labels.kind {{ "}}" }} {{ "{{" }} $labels.chart {{ "}}" }}
+              ({{ "{{" }} $labels.dependency {{ "}}" }}{{ "{{" }} $labels.current_version {{ "}}" }})
+              in {{ "{{" }} $labels.path {{ "}}" }}
+            description: >-
+              The tag or digest this reference points at now resolves to a different image than in
+              the previous scan. Nothing about the manifest changed - re-check who published it.
         {{- end }}
 {{- end }}

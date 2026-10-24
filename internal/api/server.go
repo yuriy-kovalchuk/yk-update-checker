@@ -7,59 +7,55 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 	"time"
 
-	"github.com/yuriy-kovalchuk/yk-update-checker/internal/dashboard"
 	"github.com/yuriy-kovalchuk/yk-update-checker/internal/middleware"
-	"github.com/yuriy-kovalchuk/yk-update-checker/internal/scan"
 )
 
 const (
-	maxRequestBody    = 4 << 20 // 4 MB
-	shutdownTimeout   = 30 * time.Second
+	// shutdownTimeout plus drainDelay must stay under the pod's terminationGracePeriodSeconds (30s by default).
+	shutdownTimeout   = 20 * time.Second
+	drainDelay        = 5 * time.Second
 	readHeaderTimeout = 10 * time.Second
+
+	// readTimeout bounds a whole request (body included), not just its headers: the body cap alone does not stop a client that dribbles bytes (S7).
+	readTimeout = 30 * time.Second
+	// writeTimeout covers the largest response — /api/results and the UI assets.
+	writeTimeout = 30 * time.Second
+	// idleTimeout closes keep-alive connections the dashboard never reuses; the UI polls every few seconds, so live polls are unaffected.
+	idleTimeout = 2 * time.Minute
 )
 
 // Server is the HTTP server for the update-checker.
 type Server struct {
-	port     string
-	handlers http.Handler // optional additional handler tree (e.g. /metrics)
+	port string
+
+	// draining is set once shutdown begins: /ready then answers 503 so the Service stops routing here while in-flight requests finish.
+	draining   atomic.Bool
+	drainDelay time.Duration
 }
 
 // New creates an HTTP server listening on the given port.
 func New(port string) *Server {
-	return &Server{port: port}
+	return &Server{port: port, drainDelay: drainDelay}
 }
 
-// SetHandler sets an optional HTTP handler to be mounted alongside the default routes.
-func (s *Server) SetHandler(h http.Handler) { s.handlers = h }
+// Routes registers handlers on the server's mux.
+type Routes interface{ RegisterRoutes(mux *http.ServeMux) }
 
 // Run starts the HTTP server and blocks until ctx is cancelled.
-func (s *Server) Run(ctx context.Context, svc scan.Service) error {
+func (s *Server) Run(ctx context.Context, routes Routes) error {
 	mux := http.NewServeMux()
+	routes.RegisterRoutes(mux)
 
-	dashboard.NewHandler(svc).RegisterRoutes(mux)
-	scan.NewHandler(svc).RegisterRoutes(mux)
-
+	// /health is liveness: the process serves.
 	mux.HandleFunc("GET /health", health)
-	mux.HandleFunc("GET /ready", health)
+	mux.HandleFunc("GET /ready", s.ready)
 
-	if s.handlers != nil {
-		mux.Handle("/metrics", s.handlers)
-	}
+	handler := middleware.Chain(mux, middleware.Recovery, middleware.Headers, middleware.Logger)
 
-	limitedMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
-		mux.ServeHTTP(w, r)
-	})
-
-	handler := middleware.Chain(limitedMux, middleware.Recovery, middleware.Headers, middleware.Logger)
-
-	srv := &http.Server{
-		Addr:              ":" + s.port,
-		Handler:           handler,
-		ReadHeaderTimeout: readHeaderTimeout,
-	}
+	srv := newServer(s.port, handler)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -75,11 +71,36 @@ func (s *Server) Run(ctx context.Context, svc scan.Service) error {
 		return fmt.Errorf("http server: %w", err)
 	case <-ctx.Done():
 	}
-	slog.Info("shutting down")
+	// Fail readiness first and give the endpoints controller time to take this pod out of the Service, then stop accepting connections.
+	s.draining.Store(true)
+	slog.Info("shutting down", "drain", s.drainDelay)
+	time.Sleep(s.drainDelay)
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)
+}
+
+// newServer builds the HTTP server with every timeout set (S7).
+func newServer(port string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              ":" + port,
+		Handler:           handler,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
+	}
+}
+
+func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
+	if s.draining.Load() {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"status":"draining"}`))
+		return
+	}
+	health(w, r)
 }
 
 func health(w http.ResponseWriter, _ *http.Request) {
