@@ -96,7 +96,7 @@ async function init() {
     if (e.key === 'Escape' && openKey()) { setOpen(''); return; }
     if (e.metaKey || e.ctrlKey || /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
     if (e.key === '/') { e.preventDefault(); $('q').focus(); }
-    if (e.key === 'r' && status.trigger_available) { e.preventDefault(); triggerScan(); }
+    if (e.key === 'r' && canScan()) { e.preventDefault(); triggerScan(); }
   });
 
   await refreshStatus();
@@ -156,10 +156,20 @@ async function refreshStatus() {
   return status;
 }
 
+const canScan = (st = status) => st.trigger_available && !st.scanning;
+
+// The scanner takes a one-scan-at-a-time Lease, so a second trigger would be refused anyway.
+function applyScanBtn(st) {
+  const btn = $('scan-btn');
+  btn.classList.toggle('hidden', !st.trigger_available);
+  btn.disabled = !canScan(st);
+  btn.title = st.scanning ? 'a scan is already running' : 'trigger a scan now (keyboard: r)';
+}
+
 function applyStatus(st) {
   $('version-text').textContent = st.version || 'dev';
   $('foot-version').textContent = st.version || 'dev';
-  $('scan-btn').classList.toggle('hidden', !st.trigger_available);
+  applyScanBtn(st);
 
   if (st.scanning) {
     setChip('is-scanning', 'scanning', '\uf021');
@@ -195,13 +205,14 @@ async function triggerScan() {
   btn.disabled = true;
   try {
     await api('/api/scan/trigger', 'POST');
+    status.scanning = true; // a scan is running before the next /api/status says so
     toast('ok', 'scan triggered');
     setChip('is-scanning', 'scanning', '\uf021');
     startScanPoll();
   } catch (err) {
     toast('err', `trigger failed: ${err.message}`);
   } finally {
-    btn.disabled = false;
+    applyScanBtn(status);
   }
 }
 
