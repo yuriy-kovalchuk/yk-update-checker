@@ -4,6 +4,8 @@ Finds outdated dependencies in your GitOps repositories: Helm chart dependencies
 `HelmRelease` charts, container images in Kubernetes manifests and `FROM` lines in Dockerfiles.
 Results show up in a web UI, as Prometheus metrics and alerts, and as Kubernetes resources.
 
+![The update-checker web dashboard: summary tiles, filters, and outdated references grouped by what needs attention](docs/assets/Dashboard.png)
+
 ## How it works
 
 ```mermaid
@@ -102,6 +104,8 @@ Full examples: [`examples/credentials.values.yaml`](examples/credentials.values.
 Set `metrics.serviceMonitor.enabled` and `metrics.prometheusRule.enabled` for Prometheus scraping
 and alerts, and `grafana.dashboard.enabled` for the Grafana dashboard. The metrics and alerts are
 listed in [Monitoring & alerting](docs/architecture.md#monitoring--alerting).
+
+![The shipped Grafana dashboard: summary counts, failures by error kind, and the per-reference tables](docs/assets/Grafana.png)
 
 ## Development
 
