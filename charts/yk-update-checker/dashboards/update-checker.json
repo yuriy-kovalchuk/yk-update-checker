@@ -55,7 +55,7 @@
         {
           "datasource": null,
           "editorMode": "code",
-          "expr": "sum(update_checker_dependencies_scanned{type=~\"$type\"}) or vector(0)",
+          "expr": "sum(update_checker_dependencies_scanned{source=~\"$repo\",type=~\"$type\"}) or vector(0)",
           "legendFormat": "__auto",
           "range": true,
           "refId": "A"
@@ -118,7 +118,7 @@
         {
           "datasource": null,
           "editorMode": "code",
-          "expr": "count(update_checker_dependency_outdated_info{type=~\"$type\",scope=~\"$scope\"}) or vector(0)",
+          "expr": "count(update_checker_dependency_outdated_info{source=~\"$repo\",type=~\"$type\",scope=~\"$scope\"}) or vector(0)",
           "legendFormat": "__auto",
           "range": true,
           "refId": "A"
@@ -177,7 +177,7 @@
         {
           "datasource": null,
           "editorMode": "code",
-          "expr": "count(update_checker_dependency_outdated_info{type=~\"$type\",scope=\"major\"}) or vector(0)",
+          "expr": "count(update_checker_dependency_outdated_info{source=~\"$repo\",type=~\"$type\",scope=\"major\"}) or vector(0)",
           "legendFormat": "__auto",
           "range": true,
           "refId": "A"
@@ -236,7 +236,7 @@
         {
           "datasource": null,
           "editorMode": "code",
-          "expr": "count(update_checker_dependency_skipped_tags{type=~\"$type\"}) or vector(0)",
+          "expr": "count(update_checker_dependency_skipped_tags{source=~\"$repo\",type=~\"$type\"}) or vector(0)",
           "legendFormat": "__auto",
           "range": true,
           "refId": "A"
@@ -295,7 +295,7 @@
         {
           "datasource": null,
           "editorMode": "code",
-          "expr": "count(update_checker_dependency_check_failed_info{type=~\"$type\"}) or vector(0)",
+          "expr": "count(update_checker_dependency_check_failed_info{source=~\"$repo\",type=~\"$type\"}) or vector(0)",
           "legendFormat": "__auto",
           "range": true,
           "refId": "A"
@@ -354,7 +354,7 @@
         {
           "datasource": null,
           "editorMode": "code",
-          "expr": "count(update_checker_dependency_digest_drift{type=~\"$type\"}) or vector(0)",
+          "expr": "count(update_checker_dependency_digest_drift{source=~\"$repo\",type=~\"$type\"}) or vector(0)",
           "legendFormat": "__auto",
           "range": true,
           "refId": "A"
@@ -409,7 +409,7 @@
         {
           "datasource": null,
           "editorMode": "code",
-          "expr": "(sum(update_checker_dependencies_scanned{type=~\"$type\"}) or vector(0)) - (count(update_checker_dependency_outdated_info{type=~\"$type\"}) or vector(0)) - (count(update_checker_dependency_check_failed_info{type=~\"$type\"}) or vector(0))",
+          "expr": "(sum(update_checker_dependencies_scanned{source=~\"$repo\",type=~\"$type\"}) or vector(0)) - (count(update_checker_dependency_outdated_info{source=~\"$repo\",type=~\"$type\"}) or vector(0)) - (count(update_checker_dependency_check_failed_info{source=~\"$repo\",type=~\"$type\"}) or vector(0))",
           "legendFormat": "__auto",
           "range": true,
           "refId": "A"
@@ -547,7 +547,7 @@
         {
           "datasource": null,
           "editorMode": "code",
-          "expr": "count(update_checker_dependency_outdated_info{type=~\"$type\",scope=\"minor\"}) or vector(0)",
+          "expr": "count(update_checker_dependency_outdated_info{source=~\"$repo\",type=~\"$type\",scope=\"minor\"}) or vector(0)",
           "legendFormat": "__auto",
           "range": true,
           "refId": "A"
@@ -606,7 +606,7 @@
         {
           "datasource": null,
           "editorMode": "code",
-          "expr": "count(update_checker_dependency_outdated_info{type=~\"$type\",scope=\"patch\"}) or vector(0)",
+          "expr": "count(update_checker_dependency_outdated_info{source=~\"$repo\",type=~\"$type\",scope=\"patch\"}) or vector(0)",
           "legendFormat": "__auto",
           "range": true,
           "refId": "A"
@@ -665,7 +665,7 @@
         {
           "datasource": null,
           "editorMode": "code",
-          "expr": "count(update_checker_dependency_outdated_info{type=~\"$type\",scope=\"unknown\"}) or vector(0)",
+          "expr": "count(update_checker_dependency_outdated_info{source=~\"$repo\",type=~\"$type\",scope=\"unknown\"}) or vector(0)",
           "legendFormat": "__auto",
           "range": true,
           "refId": "A"
@@ -724,7 +724,7 @@
         {
           "datasource": null,
           "editorMode": "code",
-          "expr": "count(update_checker_repository_scan_failed == 1) or vector(0)",
+          "expr": "count(update_checker_repository_scan_failed{source=~\"$repo\"} == 1) or vector(0)",
           "legendFormat": "__auto",
           "range": true,
           "refId": "A"
@@ -781,7 +781,7 @@
         {
           "datasource": null,
           "editorMode": "code",
-          "expr": "count by (error_kind) (update_checker_dependency_check_failed_info{type=~\"$type\"})",
+          "expr": "count by (error_kind) (update_checker_dependency_check_failed_info{source=~\"$repo\",type=~\"$type\"})",
           "legendFormat": "{{error_kind}}",
           "range": true,
           "refId": "A"
@@ -846,7 +846,7 @@
           "datasource": null,
           "editorMode": "code",
           "exemplar": false,
-          "expr": "update_checker_dependency_outdated_info{type=~\"$type\",scope=~\"$scope\"}",
+          "expr": "update_checker_dependency_outdated_info{source=~\"$repo\",type=~\"$type\",scope=~\"$scope\"}",
           "format": "table",
           "instant": true,
           "legendFormat": "__auto",
@@ -957,7 +957,7 @@
           "datasource": null,
           "editorMode": "code",
           "exemplar": false,
-          "expr": "update_checker_dependency_check_failed_info{type=~\"$type\"}",
+          "expr": "update_checker_dependency_check_failed_info{source=~\"$repo\",type=~\"$type\"}",
           "format": "table",
           "instant": true,
           "legendFormat": "__auto",
@@ -1069,7 +1069,7 @@
           "datasource": null,
           "editorMode": "code",
           "exemplar": false,
-          "expr": "update_checker_repository_scan_failed == 1",
+          "expr": "update_checker_repository_scan_failed{source=~\"$repo\"} == 1",
           "format": "table",
           "instant": true,
           "legendFormat": "__auto",
@@ -1180,7 +1180,7 @@
           "datasource": null,
           "editorMode": "code",
           "exemplar": false,
-          "expr": "update_checker_dependency_digest_drift{type=~\"$type\"}",
+          "expr": "update_checker_dependency_digest_drift{source=~\"$repo\",type=~\"$type\"}",
           "format": "table",
           "instant": true,
           "legendFormat": "__auto",
@@ -1291,7 +1291,7 @@
           "datasource": null,
           "editorMode": "code",
           "exemplar": false,
-          "expr": "update_checker_dependency_skipped_tags{type=~\"$type\"}",
+          "expr": "update_checker_dependency_skipped_tags{source=~\"$repo\",type=~\"$type\"}",
           "format": "table",
           "instant": true,
           "legendFormat": "__auto",
@@ -1355,6 +1355,28 @@
   ],
   "templating": {
     "list": [
+      {
+        "allValue": ".+",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": null,
+        "definition": "label_values(update_checker_dependencies_scanned, source)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Repository",
+        "multi": true,
+        "name": "repo",
+        "options": [],
+        "query": "label_values(update_checker_dependencies_scanned, source)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
       {
         "current": {
           "text": "All",
@@ -1439,5 +1461,5 @@
   "timezone": "browser",
   "title": "Update Checker",
   "uid": "yk-update-checker",
-  "version": 3
+  "version": 4
 }

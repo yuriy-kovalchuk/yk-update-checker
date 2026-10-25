@@ -131,8 +131,10 @@ Key metrics (the shipped Grafana dashboard charts all of them, mirroring the UI'
 - `update_checker_dependency_digest_drift` — value `1`, one series per reference whose image digest moved since the previous scan: a floating tag re-pushed under the same name, or a digest pin that no longer matches what its tag serves. Presence is the signal, and it is reported whether or not a version change was found; the series lives until the next scan.
 - `update_checker_dependency_check_failed_info` — value `1`, one series per reference the latest scan could not check, with the identity labels plus `error_kind`.
 - `update_checker_dependency_skipped_tags` — per reference, how many candidate tags were rejected as strays; no series when none were.
-- `update_checker_last_scan_time` — unix time of the newest successful repository scan, read from the `RepositoryScan` resources, so it survives a dashboard restart. The staleness alert relies on it.
+- `update_checker_last_scan_time` — unix time of the newest successful repository scan over all repositories, read from the `RepositoryScan` resources, so it survives a dashboard restart. The staleness alert relies on it; it is deliberately label-free (see below).
 - `update_checker_repository_scan_failed{source,kind}` — `1` while a repository's latest scan failed, else `0`. Its dependencies keep their previous values, so the outdated metrics look unchanged without this.
+
+Both dashboards filter by repository: the UI's repository selector scopes its tiles and list, and the Grafana `repo` variable (`label_values(update_checker_dependencies_scanned, source)`, multi-value with All) goes into every panel query. `update_checker_last_scan_time` has no `source` label, so Grafana's *Last scan* panel stays global: it answers "is the scanner alive at all", and labelling it per repository would turn the staleness alert into one alert per repository.
 
 The chart ships opt-in CRDs (both disabled by default):
 

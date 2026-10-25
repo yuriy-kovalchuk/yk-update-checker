@@ -65,7 +65,7 @@ const STORE_KEY = 'update-checker:ui';
 let results = [];
 let status = {};
 let scanningTimer = null;
-const filters = { q: '', cat: '', scope: '', tile: '' };
+const filters = { q: '', repo: '', cat: '', scope: '', tile: '' };
 const prefs = { view: 'attention', showCurrent: false, ...loadPrefs() };
 
 const $ = (id) => document.getElementById(id);
@@ -79,6 +79,7 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 async function init() {
   $('scan-btn').addEventListener('click', () => triggerScan());
   $('q').addEventListener('input', (e) => { filters.q = e.target.value.trim().toLowerCase(); render(); });
+  $('f-repo').addEventListener('change', (e) => { filters.repo = e.target.value; render(); });
   $('f-scope').addEventListener('change', (e) => { filters.scope = e.target.value; render(); });
   bindSegmented('f-cat', (v) => { filters.cat = v; render(); });
   bindSegmented('f-view', (v) => { prefs.view = v; savePrefs(); render(); }, prefs.view);
@@ -137,6 +138,7 @@ async function api(url, method) {
 async function loadResults() {
   try {
     results = (await api('/api/results')) || [];
+    renderRepoFilter();
     render();
   } catch (err) {
     toast('err', `could not load results: ${err.message}`);
@@ -244,7 +246,20 @@ function stateOf(r) {
 const rankOf = (state) => STATES.indexOf(state);
 const worst = (states) => states.reduce((a, b) => (rankOf(b) < rankOf(a) ? b : a), 'ok');
 
+// The repo filter scopes the whole view, tiles included; the others narrow only the list.
+function renderRepoFilter() {
+  const sel = $('f-repo');
+  const repos = [...new Set(results.map((r) => r.source).filter(Boolean))].sort();
+  if (filters.repo && !repos.includes(filters.repo)) filters.repo = '';
+  sel.innerHTML = '<option value="">all repositories</option>'
+    + repos.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+  sel.value = filters.repo;
+}
+
+const scoped = () => (filters.repo ? results.filter((r) => r.source === filters.repo) : results);
+
 function matches(r) {
+  if (filters.repo && r.source !== filters.repo) return false;
   if (filters.cat && r.type !== filters.cat) return false;
   if (filters.scope && (r.scope || 'unknown') !== filters.scope) return false;
   if (filters.tile && !TILES[filters.tile](r)) return false;
@@ -279,8 +294,9 @@ function buildGroups(rows) {
 // ---------- summary ----------
 
 function updateStats() {
-  const count = (fn) => results.filter(fn).length;
-  $('s-total').textContent = results.length;
+  const rows = scoped();
+  const count = (fn) => rows.filter(fn).length;
+  $('s-total').textContent = rows.length;
   for (const [tile, fn] of Object.entries(TILES)) {
     $(tile === 'current' ? 's-ok' : `s-${tile}`).textContent = count(fn);
   }

@@ -37,6 +37,10 @@
       <input id="q" type="text" placeholder="filter by name, workload or file (/)" autocomplete="off" spellcheck="false">
     </label>
 
+    <select class="select" id="f-repo" aria-label="repository" title="show only one scanned repository">
+      <option value="">all repositories</option>
+    </select>
+
     <span class="segmented" id="f-cat" role="group" aria-label="category">
       <button class="seg" type="button" data-v="" aria-pressed="true">All</button>
       <button class="seg" type="button" data-v="image" aria-pressed="false"><img class="logo" src="/assets/logos/kubernetes.svg" alt="" aria-hidden="true">Images</button>
