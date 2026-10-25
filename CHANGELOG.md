@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-25
+
+### Added
+- **Filter by repository**: the dashboard UI gained a repository selector that scopes the tiles and the list, and the Grafana dashboard gained a multi-value `Repository` variable (`source` label) on every panel except *Last scan*, which stays global
+
+### Fixed
+- **Scan now is inert during a scan**: the button and the `r` shortcut stay disabled while `status.scanning` is true, instead of answering the second click with `trigger failed: HTTP 409`
+
 ## [0.4.0] - 2026-10-24
 
 A redesign: the scanner writes reports as Kubernetes resources and the dashboard only reads them. Read **Breaking** and **Upgrading** before moving from 0.3.0.
@@ -96,7 +104,8 @@ A redesign: the scanner writes reports as Kubernetes resources and the dashboard
 - Single Helm chart with two workloads: one Deployment (`serve`) and one CronJob (`scan`)
 - Multi-architecture Docker image (`linux/amd64`, `linux/arm64`) published to GHCR
 
-[Unreleased]: https://github.com/yuriy-kovalchuk/yk-update-checker/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/yuriy-kovalchuk/yk-update-checker/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/yuriy-kovalchuk/yk-update-checker/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/yuriy-kovalchuk/yk-update-checker/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/yuriy-kovalchuk/yk-update-checker/releases/tag/v0.3.0
 [0.2.2]: https://github.com/yuriy-kovalchuk/yk-update-checker/releases/tag/v0.2.2
