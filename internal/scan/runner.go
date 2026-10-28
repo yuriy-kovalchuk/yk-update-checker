@@ -339,6 +339,7 @@ func newResult(p pendingCheck, chart string) Result {
 		Kind:           p.ref.Kind,
 		Protocol:       p.ref.Protocol,
 		CurrentVersion: p.ref.CurrentVersion,
+		PinnedDigest:   p.ref.Digest,
 		FinalStage:     p.ref.FinalStage,
 		CheckedAt:      metav1.Now(),
 	}

@@ -133,6 +133,11 @@ spec:
               path:
                 maxLength: 4096
                 type: string
+              pinned_digest:
+                description: PinnedDigest is the digest the manifest pins this reference
+                  to; empty when it follows a tag.
+                maxLength: 1024
+                type: string
               protocol:
                 maxLength: 63
                 type: string

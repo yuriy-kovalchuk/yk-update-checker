@@ -46,6 +46,9 @@ type Result struct {
 	CurrentResolved string `json:"current_resolved,omitempty"`
 	// FinalStage marks the FROM line whose stage produces the image a build publishes; intermediate stages are false.
 	FinalStage bool `json:"final_stage,omitempty"`
+	// PinnedDigest is the digest the manifest pins this reference to; empty when it follows a tag.
+	// +kubebuilder:validation:MaxLength=1024
+	PinnedDigest string `json:"pinned_digest,omitempty"`
 	// ImageDigest is what the checked reference points at now; comparing it across scans reveals that a mutable tag moved.
 	// +kubebuilder:validation:MaxLength=1024
 	ImageDigest string `json:"image_digest,omitempty"`

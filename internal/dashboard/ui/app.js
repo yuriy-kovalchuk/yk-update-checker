@@ -501,6 +501,7 @@ function drawerLine(l) {
 
   const facts = [
     r.image_digest ? fact('Digest', `<code>${esc(shortDigest(r.image_digest))}…</code> <button class="copy" type="button" data-copy="${esc(r.image_digest)}" title="copy the full digest">${ic('\uf0c5')}copy</button>`) : '',
+    r.pinned_digest ? fact('Pinned', `<code>${esc(shortDigest(r.pinned_digest))}…</code> <span class="muted">— the manifest pins this image</span>`) : '',
     r.tag_kind ? fact('Kind', `${ic(KIND_ICON[r.tag_kind] || KIND_ICON.unknown)} ${esc(r.tag_kind)} <span class="muted">— ${esc(KIND_HELP[r.tag_kind] || '')}</span>`) : '',
     r.current_resolved && r.current_resolved !== r.current_version ? fact('Serves', esc(r.current_resolved)) : '',
     r.scope ? fact('Scope', esc(r.scope)) : '',

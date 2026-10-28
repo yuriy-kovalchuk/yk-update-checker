@@ -175,3 +175,67 @@ spec:
 		t.Errorf("TagKind = %q, want semver even when the check failed", results[0].TagKind)
 	}
 }
+
+// TestRunImageDigestPinIsRecorded keeps a digest pin visible in the result: the report name
+// hashes it, so a scan that lost it would merge two references into one report.
+func TestRunImageDigestPinIsRecorded(t *testing.T) {
+	host := startImageRegistry(t)
+
+	tag, err := name.NewTag(host+"/app:1.0.0", name.WeakValidation)
+	if err != nil {
+		t.Fatalf("name the pushed tag: %v", err)
+	}
+	desc, err := remote.Get(tag, remote.WithContext(context.Background()))
+	if err != nil {
+		t.Fatalf("read the pushed tag: %v", err)
+	}
+
+	dir := initGitRepo(t, map[string]string{
+		"apps/web/deployment.yaml": fmt.Sprintf(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+spec:
+  template:
+    spec:
+      containers:
+        - name: follows-the-tag
+          image: %s/app:1.0.0
+        - name: pinned
+          image: %s/app:1.0.0@%s
+`, host, host, desc.Digest),
+	})
+
+	runner := NewRunner(RunnerOptions{
+		Repos:          []config.Repo{{Name: "homelab", URL: dir}},
+		NewExtractors:  func() []extractor.Extractor { return []extractor.Extractor{extractor.NewImages()} },
+		Scope:          registry.ScopeMinor,
+		ParallelChecks: 2,
+		Cache:          registry.NewIndexCache(),
+	})
+
+	results, _, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results = %+v, want one per container", results)
+	}
+
+	pinned := 0
+	for _, r := range results {
+		if r.CheckError != "" {
+			t.Errorf("%s: CheckError = %q, want the pinned digest to resolve", r.Dependency, r.CheckError)
+		}
+		switch r.PinnedDigest {
+		case "":
+		case desc.Digest.String():
+			pinned++
+		default:
+			t.Errorf("PinnedDigest = %q, want %q", r.PinnedDigest, desc.Digest)
+		}
+	}
+	if pinned != 1 {
+		t.Errorf("results carry the digest pin for %d references, want 1", pinned)
+	}
+}

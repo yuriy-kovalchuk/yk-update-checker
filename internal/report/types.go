@@ -116,9 +116,9 @@ func RepoID(repo string) string { return shortHash(repo) }
 // RepositoryScanName is the object name of a repository's RepositoryScan.
 func RepositoryScanName(repo string) string { return dnsName(repo, 46) + "-" + shortHash(repo) }
 
-// DependencyName names one reference after its identity (the pinned version included: a new pin is a new reference), so a rescan updates the same object.
+// DependencyName names one reference after its identity (the pinned version and any digest pin included: either makes a new reference), so a rescan updates the same object.
 func DependencyName(r scan.Result) string {
-	id := strings.Join([]string{r.Source, r.Type, r.Path, r.Chart, r.Dependency, r.CurrentVersion}, "\x00")
+	id := strings.Join([]string{r.Source, r.Type, r.Path, r.Chart, r.Dependency, r.CurrentVersion, r.PinnedDigest}, "\x00")
 	return dnsName(r.Source, 30) + "-" + dnsName(r.Type, 10) + "-" + shortHash(id)
 }
 
