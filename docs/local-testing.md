@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Go 1.26.10+ (the version in the `go` directive of `go.mod`)
+- Go 1.27.3+ (the version in the `go` directive of `go.mod`)
 - `git` binary on `$PATH`
 - `golangci-lint` v2.x (`brew install golangci-lint`)
 - for `make kind`: `kind`, `docker`, `helm`, `kubectl`
