@@ -180,6 +180,23 @@ func TestResultCollector_DynamicState(t *testing.T) {
 	}
 }
 
+// TestResultCollector_RepoFailuresAreOneSeriesPerRepository: a duplicate series would fail the whole scrape, not just this metric.
+func TestResultCollector_RepoFailuresAreOneSeriesPerRepository(t *testing.T) {
+	snap := report.Snapshot{Repos: []report.RepositoryScan{
+		{ObjectMeta: metav1.ObjectMeta{Name: "homelab-1"}, Status: report.RepoStatus{Repo: "homelab", Phase: report.PhaseSucceeded}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "homelab-2"}, Status: report.RepoStatus{Repo: "homelab", Phase: report.PhaseSucceeded}},
+	}}
+	reg := mustNewRegistry(t)
+	reg.MustRegister(NewResultCollector(func() report.Snapshot { return snap }, nil))
+
+	if _, err := reg.Gather(); err != nil {
+		t.Fatalf("gather failed: %v", err)
+	}
+	if count := testutil.CollectAndCount(reg, "update_checker_repository_scan_failed"); count != 1 {
+		t.Errorf("update_checker_repository_scan_failed = %d series, want 1", count)
+	}
+}
+
 func mustNewRegistry(t *testing.T) *prometheus.Registry {
 	reg := prometheus.NewRegistry()
 	t.Cleanup(func() { /* registry GC */ })

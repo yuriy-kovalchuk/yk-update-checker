@@ -158,6 +158,7 @@ func (c *ResultCollector) collectIssues(ch chan<- prometheus.Metric, r scan.Resu
 // collectRepos exports the latest successful scan time and each repository's failure state.
 func (c *ResultCollector) collectRepos(ch chan<- prometheus.Metric, repos []report.RepositoryScan) {
 	var last float64
+	seen := map[string]struct{}{}
 	for _, rs := range repos {
 		if t := rs.Status.LastSuccessTime; t != nil && float64(t.Unix()) > last {
 			last = float64(t.Unix())
@@ -166,7 +167,13 @@ func (c *ResultCollector) collectRepos(ch chan<- prometheus.Metric, repos []repo
 		if e := rs.Status.Error; e != nil {
 			failed, kind = 1, kindLabel(e.Kind)
 		}
-		ch <- prometheus.MustNewConstMetric(c.repoFail, prometheus.GaugeValue, failed, bound(rs.Status.Repo), kind)
+		source := bound(rs.Status.Repo)
+		key := source + "\xff" + kind
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		ch <- prometheus.MustNewConstMetric(c.repoFail, prometheus.GaugeValue, failed, source, kind)
 	}
 	if last > 0 {
 		ch <- prometheus.MustNewConstMetric(c.lastScan, prometheus.GaugeValue, last)
