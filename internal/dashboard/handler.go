@@ -44,8 +44,8 @@ type Handler struct {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /{$}", serveUI("index.html"))
 	mux.HandleFunc("GET /favicon.svg", serveUI("favicon.svg"))
-	mux.HandleFunc("GET /api/results", h.results)
-	mux.HandleFunc("GET /api/status", h.status)
+	mux.Handle("GET /api/results", cached("no-store", http.HandlerFunc(h.results)))
+	mux.Handle("GET /api/status", cached("no-store", http.HandlerFunc(h.status)))
 	mux.HandleFunc("POST /api/scan/trigger", h.trigger)
 	if h.Metrics != nil {
 		mux.Handle("GET /metrics", h.Metrics)
