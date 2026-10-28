@@ -76,7 +76,7 @@ sequenceDiagram
 Reports are objects, not memory, and they are the only channel between the two halves (`internal/report`):
 
 - **`RepositoryScan`** (one per repository): `phase` (Succeeded/Failed), `last_scan_time`, `last_success_time`, the classified `error`, `counts` (checked/outdated/failed) and `history` — the last N runs (`scan --history`, default 10, newest first). Named after the repository name plus a hash of it.
-- **`Dependency`** (one per checked reference): the scan result itself plus `outdated_since` (first scan that found it behind) and `latest_seen_at` (first scan that saw the current `latest_version`). Its name is a hash of the reference's identity — source, type, path, chart, dependency and pinned version — so a rescan updates the same object, and a new pin is a new object. References that disappear from the repository are deleted; only references that changed are written.
+- **`Dependency`** (one per checked reference): the scan result itself plus `outdated_since` (first scan that found it behind) and `latest_seen_at` (first scan that saw the current `latest_version`). Its name is a hash of the reference's identity — source, type, path, chart, dependency, pinned version and the digest the manifest pins — so a rescan updates the same object, and a new pin is a new object. References that disappear from the repository are deleted; only references that changed are written.
 - Both kinds are `updatechecker.yuriykovalchuk.dev/v1alpha1`, `Namespaced`, with a typed, bounded `status` schema generated from the Go types by `make generate` (a field the schema does not declare is pruned, so a new field needs a regenerate; CI fails on a stale schema) and no status subresource (the writer sends the whole object). `kubectl get repscan` / `kubectl get dep` show the useful columns, `kubectl get updatechecker` both kinds.
 - Locally the same two kinds are JSON files under `--data` — see "Where the reports live" below.
 
@@ -109,6 +109,16 @@ The file name is the object name, so a rescan rewrites the same file instead of 
 `--data=<dir>` moves the whole tree. `rm -rf data` is how you start from an empty dashboard; nothing
 expires on its own. A local dashboard polls that directory every 5 seconds, so the child `scan` it
 starts shows up in the UI without a restart.
+
+A report belongs to the release that wrote it: `app.kubernetes.io/instance`, passed as `--instance`
+by the CronJob. Its name comes only from the repository name, so a second release in the same
+namespace would address the same objects — `Writer` refuses rather than competes: `Prune` leaves a
+foreign report alone, and scanning a repository whose report names another release fails as
+`unsupported` naming it, instead of overwriting it and silently resolving its alerts.
+
+Because writes are changed-only, `Dependency.status.checked_at` is the scan in which that reference
+last *changed*, not the last scan of its repository; "when did the scan run" comes only from
+`RepositoryScan.status.last_scan_time`, which is also what `/api/status` reports as `last_scan_at`.
 
 ### Error kinds
 
@@ -254,9 +264,11 @@ The machinery the `Images` and `Dockerfile` extractors share, in `internal/regis
 - **Floating and digest-pinned pins** have no version to compare, so they are reported
   differently: `current_resolved` shows the version the tag actually points at today (from the
   OCI `org.opencontainers.image.version` annotation), `image_digest` records what it points at
-  now, and `digest_changed` is set when that digest moved since the previous scan — for a
-  mutable tag that is the only signal that an update landed. A reference pinned to a digest
-  that no longer matches what the tag serves is flagged on the very first scan.
+  now, `pinned_digest` records the digest the manifest itself pins (empty when the reference
+  follows a tag, and part of the reference's identity, so `app:1.0.0` and
+  `app:1.0.0@sha256:…` are two reports), and `digest_changed` is set when that digest moved since
+  the previous scan — for a mutable tag that is the only signal that an update landed. A reference
+  pinned to a digest that no longer matches what the tag serves is flagged on the very first scan.
 
 Results of both extractors flow into everything downstream unchanged: the `type` label is
 `image` or `dockerfile` in the API and in Prometheus, and the per-scope alert rules and the
@@ -279,7 +291,9 @@ platform, not to the app. What that means in practice:
 - **Anything that can reach the Service can use it fully.** `GET /api/results` and
   `GET /api/status` disclose internal repo names, file paths and the image
   inventory, and `POST /api/scan/trigger` starts a scan (a Job copied from the
-  scanner CronJob — never a caller-supplied spec). `/metrics` is likewise open to
+  scanner CronJob — never a caller-supplied spec). Both `GET` endpoints answer
+  `Cache-Control: no-store`, so no proxy in front of the dashboard may reply to a
+  poll from cache. `/metrics` is likewise open to
   whoever can reach it. The chart ships a plain `ClusterIP` Service and **no
   `NetworkPolicy`**, so every pod in the cluster qualifies as "can reach it".
   Replacing the reports is *not* part of that surface: writing them needs
@@ -407,6 +421,7 @@ tampered config can do:
 | `--` before the URL | a URL starting with `-` is otherwise an option (`-cprotocol.ext.allow=always`) rather than a repository |
 | `GIT_ALLOW_PROTOCOL=https:ssh:file:http:git` | exactly the transports `config.Load` accepts; `ext::` (an arbitrary command) dies here too, verified in `TestGitRefusesExtTransport` |
 | `GIT_CONFIG_NOSYSTEM=1` | `/etc/gitconfig` belongs to the image, not to this config; it must not be able to change git's behaviour underneath a scan |
+| `GIT_CONFIG_GLOBAL=/dev/null` | `GIT_CONFIG_NOSYSTEM` covers only `/etc/gitconfig`; this also excludes `~/.gitconfig` and `$XDG_CONFIG_HOME/git/config`, verified in `TestGlobalGitconfigGetsNoVote` |
 | `transfer.credentialsInUrl=die` | git refuses a URL with a plaintext password: `fatal: URL 'http://u:<redacted>@…' uses plaintext credentials` — the belt behind the config rule |
 | `GIT_TERMINAL_PROMPT=0` | a scan is never interactive; a missing credential fails fast instead of hanging on a prompt |
 

@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+- **Runtime image pin**: `alpine/git:v2.54.0` was re-pushed upstream, so the digest the Dockerfile pins moved from `sha256:4fac439e…` to `sha256:e8ceedc7…` (verified against the registry index, not just the tag)
+- **Toolchain**: Go 1.26.10 → 1.27.3 (`go.mod`, Dockerfile builder `golang:1.27.3-alpine`), which closes `GO-2026-6809` (`crypto/x509`); `k8s.io/{api,apimachinery,client-go}` 0.37.1 → 0.37.2, `controller-gen` v0.20.1 → v0.23.0 (the generated CRDs gain only the version annotation), golangci-lint in CI v2.11.4 → v2.15.0; `k8s.io/kube-openapi` stays at the pseudo-version the 0.37 line requires
+
+### Fixed
+- **Another release's reports could be deleted or overwritten**: a second Helm release in the same namespace pruned and rewrote the first one's `RepositoryScan` and `Dependency` objects. Such reports are now left alone, and the scanner fails with the `unsupported` error kind instead — one release per namespace is enforced rather than assumed
+- **One duplicate series could abort every scrape**: two repositories failing with the same `source` and `kind` produced two identical `update_checker_repository_scan_failed` series, and a rejected series makes `/metrics` answer 500; the collector now emits one per pair
+- **The API could be served from a cache**: `GET /api/results` and `GET /api/status` now answer `Cache-Control: no-store`, so an ingress or sidecar cannot hold an old scan back
+- **The footer said "checked" about the wrong thing**: it read the newest `checked_at` among the stored dependencies, which only moves when that reference changes; it now reads the scan's own timestamp
+- **A gitconfig inside the image could steer the scan**: git subprocesses also ignore the global config now (`GIT_CONFIG_GLOBAL=/dev/null`), as they already ignored the system one
+- **Two references could share one report**: a manifest that pins an image to a digest (`app:1.0.0@sha256:…`) alongside the same tag followed by name is now reported as the two references it is. The pinned digest is recorded as `pinned_digest` and joins the reference's identity, so the `Dependency` objects of digest-pinned references are **named differently once**: the scan after the upgrade recreates them and their `outdated_since`/`latest_seen_at` start over; references that only follow a tag are untouched
+
 ## [0.4.1] - 2026-10-25
 
 ### Added
