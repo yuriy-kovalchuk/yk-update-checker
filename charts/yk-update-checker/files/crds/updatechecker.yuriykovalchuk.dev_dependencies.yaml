@@ -75,6 +75,8 @@ spec:
                 maxLength: 63
                 type: string
               checked_at:
+                description: 'CheckedAt is when this reference last changed: a rescan
+                  that found nothing new leaves it where it was.'
                 format: date-time
                 type: string
               current_pushed_at:

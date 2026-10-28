@@ -317,8 +317,8 @@ function updateStats() {
 }
 
 function renderFooter() {
-  const latest = results.reduce((acc, r) => (r.checked_at && r.checked_at > acc ? r.checked_at : acc), '');
-  $('foot-checked').textContent = latest ? relTime(latest) : 'never';
+  // The scan time is the scanner's own clock; a stored dependency's timestamp only moves when that reference changes.
+  $('foot-checked').textContent = status.last_scan_at ? relTime(status.last_scan_at) : 'never';
   $('foot-refresh').textContent = `${Math.round(POLL_IDLE / 1000)}s`;
 }
 

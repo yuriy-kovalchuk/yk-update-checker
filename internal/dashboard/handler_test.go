@@ -3,6 +3,7 @@ package dashboard
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -156,6 +157,30 @@ func TestStatusSummarizesRepositories(t *testing.T) {
 	}
 	if got.LastErrorKind != errkind.Auth || len(got.RepoErrors) != 1 || got.RepoErrors[0].Repo != "bad" {
 		t.Errorf("errors = %q %+v, want bad/auth", got.LastErrorKind, got.RepoErrors)
+	}
+}
+
+// TestDashboardFooterUsesTheScanTime: a stored dependency's checked_at only moves when that reference changes, so it cannot say when the scan ran.
+func TestDashboardFooterUsesTheScanTime(t *testing.T) {
+	js, err := fs.ReadFile(uiFS, "ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := bytes.Index(js, []byte("function renderFooter()"))
+	if start < 0 {
+		t.Fatal("renderFooter not found in app.js")
+	}
+	body := js[start:]
+	end := bytes.Index(body, []byte("\n}"))
+	if end < 0 {
+		t.Fatal("renderFooter is not a function")
+	}
+	body = body[:end]
+	if !bytes.Contains(body, []byte("last_scan_at")) {
+		t.Error("renderFooter does not use status.last_scan_at")
+	}
+	if bytes.Contains(body, []byte("checked_at")) {
+		t.Error("renderFooter still infers the scan time from a dependency's checked_at")
 	}
 }
 

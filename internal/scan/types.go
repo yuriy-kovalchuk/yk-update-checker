@@ -35,7 +35,8 @@ type Result struct {
 	CheckError string `json:"check_error,omitempty"`
 	// CheckErrorKind classifies CheckError (auth, not_found, unreachable, ...; see internal/errkind) so the dashboard can say what to check.
 	CheckErrorKind errkind.Kind `json:"check_error_kind,omitempty"`
-	CheckedAt      metav1.Time  `json:"checked_at"`
+	// CheckedAt is when this reference last changed: a rescan that found nothing new leaves it where it was.
+	CheckedAt metav1.Time `json:"checked_at"`
 
 	// TagKind is how an image tag is versioned (semver, calver, date, build, floating, opaque); empty for charts.
 	// +kubebuilder:validation:MaxLength=63
