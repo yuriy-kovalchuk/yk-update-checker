@@ -56,6 +56,7 @@ func TestGitEnvHardening(t *testing.T) {
 	want := []string{
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_ALLOW_PROTOCOL=https:ssh:file:http:git",
 		"GIT_CONFIG_COUNT=1",
 		"GIT_CONFIG_KEY_0=transfer.credentialsInUrl",
@@ -90,6 +91,88 @@ func TestGitEnvHardening(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("GIT_CONFIG_COUNT = %d, want 1 for the hardening pair alone", count)
+	}
+}
+
+// gitAt runs one git command in dir with an environment that ignores this developer's own configuration.
+func gitAt(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.CommandContext(context.Background(), "git", args...)
+	cmd.Dir = dir
+	cmd.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + t.TempDir(),
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_AUTHOR_NAME=probe", "GIT_AUTHOR_EMAIL=probe@example.com",
+		"GIT_COMMITTER_NAME=probe", "GIT_COMMITTER_EMAIL=probe@example.com",
+		"GIT_TERMINAL_PROMPT=0",
+	}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+}
+
+// seededRepo creates a one-commit repository at dir, recognisable by marker.
+func seededRepo(t *testing.T, dir, marker string) string {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitAt(t, dir, "init", "-q")
+	if err := os.WriteFile(filepath.Join(dir, marker), []byte(marker), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitAt(t, dir, "add", ".")
+	gitAt(t, dir, "commit", "-q", "-m", "seed")
+	return dir
+}
+
+// withoutEnv drops one entry from an environment.
+func withoutEnv(env []string, entry string) []string {
+	out := make([]string, 0, len(env))
+	for _, e := range env {
+		if e != entry {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// TestGlobalGitconfigGetsNoVote: the image's or the pod's ~/.gitconfig cannot redirect a configured clone.
+func TestGlobalGitconfigGetsNoVote(t *testing.T) {
+	configured := seededRepo(t, filepath.Join(t.TempDir(), "real"), "real-marker")
+	hijacked := seededRepo(t, filepath.Join(t.TempDir(), "other"), "other-marker")
+
+	home := t.TempDir()
+	hostile := "[url " + strconv.Quote("file://"+hijacked) + "]\n\tinsteadOf = " + strconv.Quote("file://"+configured) + "\n"
+	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(hostile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+
+	repo := config.Repo{Name: "app", URL: "file://" + configured}
+
+	// The control first: without the guard the same ~/.gitconfig really does move the clone, so the assertion below proves something.
+	control := filepath.Join(t.TempDir(), "control")
+	cmd := exec.CommandContext(context.Background(), "git", "clone", "--depth=1", "--single-branch", "--", repo.URL, control)
+	cmd.Env = withoutEnv(gitEnv(nil), "GIT_CONFIG_GLOBAL=/dev/null")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("control clone: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(control, "other-marker")); err != nil {
+		t.Fatal("this git ignores the hostile ~/.gitconfig, so the test proves nothing")
+	}
+
+	dest := filepath.Join(t.TempDir(), "checkout")
+	if err := New(0).Sync(context.Background(), repo, dest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "real-marker")); err != nil {
+		t.Errorf("the checkout is not the configured repository: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "other-marker")); err == nil {
+		t.Error("a ~/.gitconfig insteadOf redirect moved the clone to another repository")
 	}
 }
 

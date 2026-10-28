@@ -169,6 +169,8 @@ func gitEnv(pairs [][2]string) []string {
 		"GIT_TERMINAL_PROMPT=0",
 		// Ignore /etc/gitconfig: it belongs to the image rather than to this config, and it is one way for a layer to change git's behaviour behind this process's back.
 		"GIT_CONFIG_NOSYSTEM=1",
+		// NOSYSTEM covers only /etc/gitconfig; /dev/null here also excludes ~/.gitconfig and $XDG_CONFIG_HOME/git/config.
+		"GIT_CONFIG_GLOBAL=/dev/null",
 		// Exactly the transports config.Load accepts.
 		"GIT_ALLOW_PROTOCOL=https:ssh:file:http:git",
 	}
