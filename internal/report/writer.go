@@ -67,7 +67,7 @@ func (w Writer) Prune(ctx context.Context, repos []string) error {
 		return err
 	}
 	for _, rs := range all {
-		if keep[rs.Name] {
+		if keep[rs.Name] || w.foreignOwner(rs.Labels) != "" {
 			continue
 		}
 		deps, err := w.Backend.ListDependencies(ctx, RepoID(rs.Status.Repo))
@@ -90,11 +90,24 @@ func (w Writer) repoScan(ctx context.Context, repo string) (*RepositoryScan, err
 	name := RepositoryScanName(repo)
 	all, err := w.Backend.ListRepositoryScans(ctx)
 	for i := range all {
-		if all[i].Name == name {
-			return &all[i], err
+		if all[i].Name != name {
+			continue
 		}
+		if other := w.foreignOwner(all[i].Labels); other != "" {
+			return nil, errkind.Wrap(errkind.Unsupported, fmt.Errorf(
+				"repository %q already has a report written by update-checker release %q: install one release per namespace", repo, other))
+		}
+		return &all[i], err
 	}
 	return &RepositoryScan{ObjectMeta: metav1.ObjectMeta{Name: name}}, err
+}
+
+// foreignOwner names the release that wrote l, or "" when this Writer owns it.
+func (w Writer) foreignOwner(l map[string]string) string {
+	if l[LabelInstance] == w.Instance {
+		return ""
+	}
+	return l[LabelInstance]
 }
 
 // dependencies writes the references that changed and deletes the ones that are gone.
@@ -106,7 +119,9 @@ func (w Writer) dependencies(ctx context.Context, repo string, results []scan.Re
 	}
 	old := make(map[string]Dependency, len(stored))
 	for _, d := range stored {
-		old[d.Name] = d
+		if w.foreignOwner(d.Labels) == "" {
+			old[d.Name] = d
+		}
 	}
 	var counts Counts
 	seen := map[string]bool{}

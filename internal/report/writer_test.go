@@ -126,6 +126,33 @@ func TestPruneRemovesUnconfiguredRepositories(t *testing.T) {
 	}
 }
 
+// TestAnotherReleaseIsLeftAlone: reports written by a different Helm release in the same namespace are neither deleted nor replaced.
+func TestAnotherReleaseIsLeftAlone(t *testing.T) {
+	ctx := context.Background()
+	f := Files{Dir: t.TempDir()}
+	a := Writer{Backend: f, History: 3, Instance: "stack-a"}
+	b := Writer{Backend: f, History: 1, Instance: "stack-b"}
+
+	if err := a.Repo(ctx, "homelab", []scan.Result{res("nginx", "1.0", "1.2", "")}, nil); err != nil {
+		t.Fatal(err)
+	}
+	// stack-b does not configure homelab, so Prune must not reach across releases.
+	if err := b.Prune(ctx, []string{"other"}); err != nil {
+		t.Fatal(err)
+	}
+	if deps, _ := f.ListDependencies(ctx, ""); len(deps) != 1 {
+		t.Errorf("dependencies after another release pruned = %d, want stack-a's kept", len(deps))
+	}
+	// Both releases configure homelab, so they would write the same object: the second refuses instead of clobbering.
+	if err := b.Repo(ctx, "homelab", []scan.Result{res("redis", "7.0", "7.1", "")}, nil); errkind.Of(err) != errkind.Unsupported {
+		t.Errorf("scanning a repository stack-a owns = %v, want an unsupported failure", err)
+	}
+	deps, _ := f.ListDependencies(ctx, "")
+	if len(deps) != 1 || deps[0].Status.Dependency != "nginx" {
+		t.Errorf("dependencies = %+v, want stack-a's nginx untouched", deps)
+	}
+}
+
 // TestUnreadableReportIsSkipped: one corrupt object must not hide every other report.
 func TestUnreadableReportIsSkipped(t *testing.T) {
 	ctx := context.Background()
