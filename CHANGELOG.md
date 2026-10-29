@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.2] - 2026-10-29
 
 ### Changed
 - **Runtime image pin**: `alpine/git:v2.54.0` was re-pushed upstream, so the digest the Dockerfile pins moved from `sha256:4fac439e…` to `sha256:e8ceedc7…` (verified against the registry index, not just the tag)
