@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **The footer said "checked" about the wrong thing**: it read the newest `checked_at` among the stored dependencies, which only moves when that reference changes; it now reads the scan's own timestamp
 - **A gitconfig inside the image could steer the scan**: git subprocesses also ignore the global config now (`GIT_CONFIG_GLOBAL=/dev/null`), as they already ignored the system one
 - **Two references could share one report**: a manifest that pins an image to a digest (`app:1.0.0@sha256:…`) alongside the same tag followed by name is now reported as the two references it is. The pinned digest is recorded as `pinned_digest` and joins the reference's identity, so the `Dependency` objects of digest-pinned references are **named differently once**: the scan after the upgrade recreates them and their `outdated_since`/`latest_seen_at` start over; references that only follow a tag are untouched
+- **The published image carried a fixable HIGH**: every `alpine/git` tag freezes its packages at the base image's build date, so all of them (`latest`, `2.54.0`, `v2.54.0`) still shipped `libcurl 8.22.0-r0` (CVE-2026-92392) while Alpine 3.24 had the fix. The runtime stage now resolves that package at our build date (`apk add --no-cache --upgrade libcurl`), which took it to `8.23.0-r0`
 
 ## [0.4.1] - 2026-10-25
 

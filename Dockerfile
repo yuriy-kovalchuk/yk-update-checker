@@ -21,6 +21,8 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 
 # Runtime pinned by digest: this image's git reads every credential (refresh: docker buildx imagetools inspect alpine/git:<tag>).
 FROM alpine/git:v2.54.0@sha256:e8ceedc73bd80992ae8d58a7d24c58b8322146c354f1d2e81a97db4452068ec0
+# The base froze libcurl at its own build date (8.22.0-r0, CVE-2026-92392); apk resolves it at ours instead.
+RUN apk add --no-cache --upgrade libcurl
 LABEL org.opencontainers.image.title="yk-update-checker" \
       org.opencontainers.image.description="Scans GitOps repos for outdated Helm chart and FluxCD dependencies" \
       org.opencontainers.image.source="https://github.com/yuriy-kovalchuk/yk-update-checker" \
