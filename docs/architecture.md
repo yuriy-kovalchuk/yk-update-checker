@@ -170,6 +170,10 @@ short-lived allocation per poll, so the default 128Mi dashboard is comfortable u
 
 Only one scan runs at a time, whatever started it: the scan holds a Lease (`<fullname>-scan`) in
 the cluster, or an exclusive lock on `<data>/.scan.lock` locally; a second scan logs that and exits 0.
+Giving the Lease up is an API write, so `Env.Lock`'s release waits for it: a Lease still naming a pod
+that exited blocks the next scan for as long as the `leaseDuration` recorded in it, because client-go
+measures a dead holder from when it first reads the record rather than from its `renewTime` — which is
+why `Env.Lock` waits `2 × leaseDuration` before calling the holder live.
 
 ## Package layout
 

@@ -47,6 +47,7 @@ func Connect() (Env, error) {
 const (
 	leaseDuration = 15 * time.Second
 	retryPeriod   = 2 * time.Second
+	lockWait      = 2 * leaseDuration // a new holder waits out the leaseDuration recorded in the Lease it takes over
 )
 
 // Leader campaigns for the Lease named lease until ctx ends; the result reports whether this pod leads.
@@ -73,12 +74,18 @@ func (e Env) Lock(ctx context.Context, lease string) (context.Context, context.C
 		release()
 		return nil, nil, err
 	}
-	go elector.Run(ctx)
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		elector.Run(ctx)
+	}()
 	select {
 	case c := <-held:
-		return c, release, nil
-	case <-time.After(leaseDuration + retryPeriod): // long enough to take over a crashed holder's Lease
+		// release waits for Run to return, so the Lease is given up before the caller exits and the next scan is not blocked
+		return c, func() { release(); <-stopped }, nil
+	case <-time.After(lockWait): // long enough to take over a crashed holder's Lease
 		release()
+		<-stopped
 		return nil, nil, trigger.ErrAlreadyRunning
 	}
 }

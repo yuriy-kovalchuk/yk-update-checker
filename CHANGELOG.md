@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **A scan could do nothing and still look healthy**: a scan pod exited while client-go's Lease release was still in flight, so the scan Lease kept naming a pod that no longer existed. The next scan then had to wait out the full `leaseDuration` recorded in that Lease (client-go measures an abandoned holder from when it first reads the record, not from `renewTime`) and `Env.Lock` gave up after exactly `leaseDuration + retryPeriod` = 17s, so the takeover race was won by luck: manual triggers skipped about half the time, and three nightly CronJob runs wrote no reports while their Jobs reported `Complete`. The release now completes before the process exits, the wait for a holder that died is `2 × leaseDuration`, and a scan that really is refused logs WARN naming the Lease. Side effect: a scan triggered while another is running now waits that budget and starts if the first one finishes inside it
+
 ## [0.4.2] - 2026-10-29
 
 ### Changed
