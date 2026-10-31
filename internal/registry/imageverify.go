@@ -176,13 +176,23 @@ func (c *IndexCache) candidateSignals(ctx context.Context, bl *verifyBaseline, c
 	}
 
 	// 6. The same digest as another tag makes this tag an alias, not a build.
+	var strays []string
 	for _, other := range bl.aliases(meta.Digest, cand.Raw) {
 		s.info = append(s.info, "alias of "+other)
-		// An alias of a floating tag (latest, nightly) is what a current release looks like too, so on its own it says nothing.
 		shape := classifyTag(other)
-		if shape.Kind == TagDate || shape.Kind == TagOpaque || isPrerelease(shape) {
-			s.soft = append(s.soft, "same digest as "+other)
+		// The alias spells the candidate's own version as a pre-release, so the content is that build whatever the tag claims.
+		if ownPreRelease(shape, cand) {
+			s.hard = append(s.hard, "image is also tagged "+other)
+			continue
 		}
+		// An alias of a floating tag (latest, nightly) is what a current release looks like too, so on its own it says nothing.
+		if shape.Kind == TagDate || shape.Kind == TagOpaque || isPrerelease(shape) {
+			strays = append(strays, other)
+		}
+	}
+	// One build published under several names is one piece of evidence, not one per name.
+	if len(strays) > 0 {
+		s.soft = append(s.soft, "same digest as "+strings.Join(strays, ", "))
 	}
 
 	// 7. Unsigned where the current tag is signed. If the current tag carries no signatures there is nothing to compare against.
@@ -192,6 +202,19 @@ func (c *IndexCache) candidateSignals(ctx context.Context, bl *verifyBaseline, c
 		}
 	}
 	return s
+}
+
+// ownPreRelease reports whether other names the candidate's own version as a pre-release: 9.2.0-rc1 beside 9.2.
+func ownPreRelease(other, cand tagShape) bool {
+	if !isPrerelease(other) || !other.comparable() || len(other.Core) < len(cand.Core) {
+		return false
+	}
+	for i, g := range cand.Core {
+		if group(other.Core, i) != g {
+			return false
+		}
+	}
+	return true
 }
 
 // strictSubset reports whether every entry of sub is in super while sub holds fewer of them.
