@@ -260,10 +260,13 @@ The machinery the `Images` and `Dockerfile` extractors share, in `internal/regis
 - **Candidate verification** (`verify_image_tags`, default `true`) re-checks the handful of
   winning tags (`imageVerifyCandidates`, default 3) before reporting one, because registries
   list stray tags: a backport build, a fork's rebuild, an arch-specific leftover. A candidate
-  is rejected on one hard signal (its own image metadata declares a different version) or two
-  soft ones (pushed *before* the current tag; no sibling tags; skips a version range that the
-  registry does not list; narrower platform coverage than the current tag; identical digest to
-  another tag; unsigned where the current tag is signed). Rejections are never silent — they
+  is rejected on one hard signal (its own image metadata declares a different version, or the
+  same digest is also served under a pre-release *of that very version* — a `9.2` tag holding
+  the `9.2.0-rc1` build is not a release) or two soft ones (pushed *before* the current tag; no
+  sibling tags; skips a version range that the registry does not list; narrower platform
+  coverage than the current tag; an identical digest to other tags, counted once however many
+  names share it, because vendors such as Cloudflare publish every release under build-counter
+  aliases too; unsigned where the current tag is signed). Rejections are never silent — they
   land in `skipped` with reasons and in the `note` the UI shows.
 - **Floating and digest-pinned pins** have no version to compare, so they are reported
   differently: `current_resolved` shows the version the tag actually points at today (from the

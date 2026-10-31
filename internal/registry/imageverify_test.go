@@ -593,6 +593,90 @@ func TestVerifyDigestAliasOfNightly(t *testing.T) {
 	}
 }
 
+// TestVerifyAliasesOfOneBuildAreOneSignal: a vendor that stamps every release with its own build tags (Cloudflare serves 2026.10.7, 2002-872b241 and 2002-872b241f9487 from one image) keeps its releases reportable.
+func TestVerifyAliasesOfOneBuildAreOneSignal(t *testing.T) {
+	p := newPushed()
+	release1 := newTestImage(t, "", time.Unix(1763000000, 0), "linux/amd64")
+	release2 := newTestImage(t, "", time.Unix(1765000000, 0), "linux/amd64")
+	dgst1, err := release1.Digest()
+	if err != nil {
+		t.Fatalf("digest of the first release: %v", err)
+	}
+	dgst2, err := release2.Digest()
+	if err != nil {
+		t.Fatalf("digest of the second release: %v", err)
+	}
+	host, _ := startVendorRegistry(t, map[string]http.Handler{
+		"/api/v1/": quayTagAPI(map[string]tagReport{
+			"v1.9.1":            {Pushed: time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC)},
+			"v2.0.0":            {Pushed: time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)},
+			"v2.0.1":            {Pushed: time.Date(2026, 11, 2, 18, 0, 0, 0, time.UTC)},
+			"1989-99b2eb2":      {Pushed: time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC), Digest: dgst1.String()},
+			"1989-99b2eb2c0152": {Pushed: time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC), Digest: dgst1.String()},
+			"2002-872b241":      {Pushed: time.Date(2026, 11, 2, 18, 0, 0, 0, time.UTC), Digest: dgst2.String()},
+			"2002-872b241f9487": {Pushed: time.Date(2026, 11, 2, 18, 0, 0, 0, time.UTC), Digest: dgst2.String()},
+		}, 0),
+	})
+	vendor := withVendorAPI(host, vendorAPI{kind: apiQuay, base: "http://" + host})
+	const repo = "buildstamps/app"
+
+	p.tag(t, host, repo, "v1.9.1", newTestImage(t, "", time.Unix(1760000000, 0), "linux/amd64"))
+	p.tag(t, host, repo, "v2.0.0", release1)
+	p.tag(t, host, repo, "1989-99b2eb2", release1)
+	p.tag(t, host, repo, "1989-99b2eb2c0152", release1)
+	p.tag(t, host, repo, "v2.0.1", release2)
+	p.tag(t, host, repo, "2002-872b241", release2)
+	p.tag(t, host, repo, "2002-872b241f9487", release2)
+
+	info := mustLookup(t, NewIndexCache(vendor), host+"/"+repo, "v1.9.1", ScopeMajor)
+	if info.Latest != "v2.0.1" {
+		t.Errorf("Latest = %q, want v2.0.1: two names for one build are one signal, not two", info.Latest)
+	}
+	if len(info.Skipped) != 0 {
+		t.Errorf("Skipped = %+v, want none", info.Skipped)
+	}
+	if !strings.Contains(info.Note, "same digest as 2002-872b241, 2002-872b241f9487") {
+		t.Errorf("Note = %q, want both aliases named once", info.Note)
+	}
+}
+
+// TestVerifyCandidateIsItsOwnPreRelease: a release tag whose image is the release candidate build is an RC, whatever the tag is called.
+func TestVerifyCandidateIsItsOwnPreRelease(t *testing.T) {
+	p := newPushed()
+	rc := newTestImage(t, "", time.Unix(1765000000, 0), "linux/amd64")
+	dgst, err := rc.Digest()
+	if err != nil {
+		t.Fatalf("image digest: %v", err)
+	}
+	host, _ := startVendorRegistry(t, map[string]http.Handler{
+		"/api/v1/": quayTagAPI(map[string]tagReport{
+			"9.1.2":            {Pushed: time.Date(2026, 9, 21, 8, 0, 0, 0, time.UTC)},
+			"9.2":              {Pushed: time.Date(2026, 9, 21, 9, 0, 0, 0, time.UTC)},
+			"9.2.0-rc1":        {Pushed: time.Date(2026, 9, 21, 9, 0, 0, 0, time.UTC), Digest: dgst.String()},
+			"9.2.0-rc1-trixie": {Pushed: time.Date(2026, 9, 21, 9, 0, 0, 0, time.UTC), Digest: dgst.String()},
+		}, 0),
+	})
+	vendor := withVendorAPI(host, vendorAPI{kind: apiQuay, base: "http://" + host})
+	const repo = "valkey/valkey"
+
+	p.tag(t, host, repo, "9.1.2", newTestImage(t, "", time.Unix(1760000000, 0), "linux/amd64"))
+	p.tag(t, host, repo, "9.2", rc)
+	p.tag(t, host, repo, "9.2.0-rc1", rc)
+	p.tag(t, host, repo, "9.2.0-rc1-trixie", rc)
+
+	info := mustLookup(t, NewIndexCache(vendor), host+"/"+repo, "9.1.2", ScopeAll)
+	if info.Latest != "" {
+		t.Errorf("Latest = %q, want 9.2 rejected: its image is the 9.2.0-rc1 build", info.Latest)
+	}
+	s, ok := skippedFor(info, "9.2")
+	if !ok {
+		t.Fatalf("Skipped = %+v, want 9.2", info.Skipped)
+	}
+	if !strings.Contains(joined(s), "image is also tagged 9.2.0-rc1") {
+		t.Errorf("reasons %q want the pre-release the image really is", joined(s))
+	}
+}
+
 // The version label is decisive only when it names another version this image really has; a base-image label (Ubuntu "24.04") is no signal at all.
 func TestVerifyVersionLabelSignals(t *testing.T) {
 	cases := []struct {
