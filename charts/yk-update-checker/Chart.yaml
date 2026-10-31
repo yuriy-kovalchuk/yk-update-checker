@@ -10,8 +10,8 @@ type: application
 # Between releases these hold the last released values. A release-prep commit bumps both to the
 # new version and converts CHANGELOG.md [Unreleased] into a dated section; pushing the tag then
 # publishes what is in this file, and CI fails the release if they do not match the tag.
-version: 0.4.2
-appVersion: "0.4.2"
+version: 0.4.3
+appVersion: "0.4.3"
 keywords:
   - helm
   - fluxcd

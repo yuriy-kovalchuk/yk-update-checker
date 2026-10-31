@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.3] - 2026-10-31
 
 ### Fixed
 - **An image published under several names could never be reported**: verification counted one "same digest as …" signal per alias, so a vendor that stamps each build with its own tags (`cloudflared:2026.10.7`, `2002-872b241`, `2002-872b241f9487` are one image) reached the two-signal threshold and every release of it was reported as `skipped`. One shared digest is now one signal, however many names carry it. A tag whose image is the pre-release **of that very version** (`9.2` serving the `9.2.0-rc1` build) is now rejected outright, with the honest reason, instead of relying on two name collisions
