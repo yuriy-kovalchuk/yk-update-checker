@@ -126,7 +126,7 @@ func runScan(ctx context.Context, args []string) error {
 
 	writer, ctx, release, err := openStore(ctx, *store, *data, *lock, report.Writer{History: *history, Instance: *instance})
 	if errors.Is(err, trigger.ErrAlreadyRunning) {
-		slog.Info("another scan holds the lock; nothing to do")
+		slog.Warn("another scan holds the lock; nothing to do", "lock", *lock)
 		return nil
 	}
 	if err != nil {
