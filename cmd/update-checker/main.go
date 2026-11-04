@@ -134,24 +134,17 @@ func runScan(ctx context.Context, args []string) error {
 	}
 	defer release()
 
-	var mu sync.Mutex
-	done := map[string]bool{}
-	record := func(repo string, results []scan.Result, err error) error {
-		mu.Lock()
-		done[repo] = true
-		mu.Unlock()
-		return writer.Repo(ctx, repo, results, err)
-	}
+	names := repoNames(cfg)
+	var tracker *reached
 	var onRepo func(string, []scan.Result, error) error
 	if writer != nil {
-		names := make([]string, len(cfg.Repos))
-		for i, r := range cfg.Repos {
-			names[i] = r.Name
-		}
 		if err := writer.Prune(ctx, names); err != nil {
 			return fmt.Errorf("prune reports of removed repositories: %w", err)
 		}
-		onRepo = record
+		tracker = &reached{done: map[string]bool{}, write: func(repo string, results []scan.Result, err error) error {
+			return writer.Repo(ctx, repo, results, err)
+		}}
+		onRepo = tracker.onRepo
 	}
 	runner, err := buildRunner(cfg, onRepo)
 	if err != nil {
@@ -161,12 +154,8 @@ func runScan(ctx context.Context, args []string) error {
 	results, repoErrs, err := runner.Run(ctx)
 	if err != nil {
 		// A timeout is the scan's failure, worth a report; a cancellation (SIGTERM) just means "not scanned".
-		if writer != nil && ctx.Err() == nil {
-			for _, repo := range cfg.Repos {
-				if !done[repo.Name] {
-					err = errors.Join(err, record(repo.Name, nil, err))
-				}
-			}
+		if tracker != nil && ctx.Err() == nil {
+			err = errors.Join(err, tracker.failRest(names, err))
 		}
 		return fmt.Errorf("scan: %w", err)
 	}
@@ -181,6 +170,42 @@ func runScan(ctx context.Context, args []string) error {
 		return fmt.Errorf("scan finished with %d repo failure(s): %w", len(repoErrs), errors.Join(repoErrs...))
 	}
 	return nil
+}
+
+func repoNames(cfg *config.Config) []string {
+	names := make([]string, len(cfg.Repos))
+	for i, r := range cfg.Repos {
+		names[i] = r.Name
+	}
+	return names
+}
+
+// reached remembers which repositories a scan wrote, so a timeout can record the rest as failed.
+type reached struct {
+	mu    sync.Mutex
+	done  map[string]bool
+	write func(repo string, results []scan.Result, err error) error
+}
+
+func (r *reached) onRepo(repo string, results []scan.Result, err error) error {
+	r.mu.Lock()
+	r.done[repo] = true
+	r.mu.Unlock()
+	return r.write(repo, results, err)
+}
+
+// failRest records every repository the scan never reached as failed with scanErr.
+func (r *reached) failRest(repos []string, scanErr error) error {
+	var errs []error
+	for _, repo := range repos {
+		r.mu.Lock()
+		done := r.done[repo]
+		r.mu.Unlock()
+		if !done {
+			errs = append(errs, r.onRepo(repo, nil, scanErr))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // openStore returns the writer --store names (nil prints JSON) holding the scan lock, the context that ends if the lock is lost, and its release.
