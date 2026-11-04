@@ -51,14 +51,13 @@
     <div class="nav-group">
       <div class="nav-title">Repository</div>
       <div class="repo-switch">
-        <select id="f-repo" aria-label="repository" title="show only one scanned repository">
+        <select class="select" id="f-repo" aria-label="repository" title="show only one scanned repository">
           <option value="">all repos</option>
         </select>
       </div>
-      <!-- Below 900px this select stands in for the kind links, so the filters fit one row. -->
       <!-- app.js fills the kind picker and links from CATS; below 900px the picker replaces the links. -->
       <div class="kind-switch">
-        <select id="f-cat" aria-label="reference kind"></select>
+        <select class="select" id="f-cat" aria-label="reference kind"></select>
       </div>
       <div class="nav-subtitle">Reference kind</div>
       <button class="nav-link" type="button" data-cat="">
