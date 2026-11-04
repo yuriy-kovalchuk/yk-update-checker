@@ -489,12 +489,12 @@ function rowHTML(g) {
 function badgesHTML(g, users) {
   const badges = [];
   const scope = g.lines.map((l) => l.lead.scope).find(Boolean);
-  if (scope && scope !== 'unknown') badges.push(badge(scope, `badge-scope-${scope}`, 'size of the largest available update'));
+  if (scope && scope !== 'unknown') badges.push(badge(scope, `is-${scope}`, 'size of the largest available update'));
   const skipped = users.reduce((n, r) => Math.max(n, (r.skipped || []).length), 0);
-  if (skipped) badges.push(badge(`${skipped} skipped`, 'badge-skipped', 'tags that looked newer but were rejected as strays — open for the reasons', 'block'));
-  if (users.some((r) => r.digest_changed)) badges.push(badge('digest moved', 'badge-drift', 'the tag points at a different image than in the previous scan', 'compare_arrows'));
+  if (skipped) badges.push(badge(`${skipped} skipped`, 'is-skipped', 'tags that looked newer but were rejected as strays — open for the reasons', 'block'));
+  if (users.some((r) => r.digest_changed)) badges.push(badge('digest moved', 'is-drift', 'the tag points at a different image than in the previous scan', 'compare_arrows'));
   const kinds = [...new Set(users.filter((r) => r.check_error).map((r) => r.check_error_kind || 'other'))];
-  if (kinds.length) badges.push(badge(kinds.length === 1 ? errLabel(kinds[0]) : 'lookup failed', 'badge-err', kinds.map(errLabel).join(', '), 'error'));
+  if (kinds.length) badges.push(badge(kinds.length === 1 ? errLabel(kinds[0]) : 'lookup failed', 'is-error', kinds.map(errLabel).join(', '), 'error'));
   return badges.join('') || '<span class="muted">—</span>';
 }
 

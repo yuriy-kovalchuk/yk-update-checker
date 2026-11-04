@@ -647,17 +647,11 @@ tbody tr.grp-row.is-open td { background: var(--surface-hover); }
   border-radius: 12px;
   padding: 1px 10px;
   margin: 0 4px 4px 0;
-  background: var(--surface-sunk);
-  color: var(--text-2);
+  background: var(--state-container);
+  color: var(--state-text);
 }
 .badge .icon { width: 14px; height: 14px; fill: currentColor; }
 .col-notes { min-width: 130px; }
-.badge-scope-major { background: var(--err-container); color: var(--err-text); }
-.badge-scope-patch { background: var(--ok-container); color: var(--ok-text); }
-.badge-scope-minor { background: var(--warn-container); color: var(--warn-text); }
-.badge-drift { background: var(--primary-container); color: var(--on-primary-container); }
-.badge-err { background: var(--err-container); color: var(--err-text); }
-.badge-skipped { background: var(--violet-container); color: var(--violet-text); }
 
 /* ── Versions ────────────────────────────────────────────────────────── */
 
