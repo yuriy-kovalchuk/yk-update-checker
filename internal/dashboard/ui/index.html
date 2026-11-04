@@ -56,31 +56,15 @@
         </select>
       </div>
       <!-- Below 900px this select stands in for the kind links, so the filters fit one row. -->
+      <!-- app.js fills the kind picker and links from CATS; below 900px the picker replaces the links. -->
       <div class="kind-switch">
-        <select id="f-cat" aria-label="reference kind">
-          <option value="">all kinds</option>
-          <option value="image">Container images</option>
-          <option value="dockerfile">Dockerfiles</option>
-          <option value="helm">Helm charts</option>
-          <option value="fluxcd">FluxCD releases</option>
-        </select>
+        <select id="f-cat" aria-label="reference kind"></select>
       </div>
       <div class="nav-subtitle">Reference kind</div>
       <button class="nav-link" type="button" data-cat="">
         <span data-icon="inventory"></span>All references<span class="nav-count" id="c-all"></span>
       </button>
-      <button class="nav-link" type="button" data-cat="image">
-        <img class="logo" src="/assets/logos/kubernetes.svg" alt="" aria-hidden="true">Container images<span class="nav-count" id="c-image"></span>
-      </button>
-      <button class="nav-link" type="button" data-cat="dockerfile">
-        <img class="logo" src="/assets/logos/docker.svg" alt="" aria-hidden="true">Dockerfiles<span class="nav-count" id="c-dockerfile"></span>
-      </button>
-      <button class="nav-link" type="button" data-cat="helm">
-        <img class="logo" src="/assets/logos/helm.svg" alt="" aria-hidden="true">Helm charts<span class="nav-count" id="c-helm"></span>
-      </button>
-      <button class="nav-link" type="button" data-cat="fluxcd">
-        <img class="logo" src="/assets/logos/flux.svg" alt="" aria-hidden="true">FluxCD releases<span class="nav-count" id="c-fluxcd"></span>
-      </button>
+      <div class="nav-kinds" id="kind-links"></div>
     </div>
 
     <div class="nav-group nav-bottom">

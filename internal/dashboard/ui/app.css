@@ -347,6 +347,7 @@ kbd {
 /* Repository picker, styled like the console's project picker. */
 .repo-switch { padding: 4px 16px 4px 24px; }
 .kind-switch { display: none; }
+.nav-kinds { display: contents; }
 .repo-switch select, .kind-switch select {
   width: 100%;
   height: 40px;

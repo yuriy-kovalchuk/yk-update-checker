@@ -10,8 +10,8 @@
 const CATS = [
   { id: 'image', label: 'Container images', logo: 'kubernetes.svg', kind: 'Kubernetes manifest', blurb: 'tags referenced by workload pod specs' },
   { id: 'dockerfile', label: 'Dockerfiles', logo: 'docker.svg', kind: 'Dockerfile', blurb: 'base images pinned in FROM lines' },
-  { id: 'helm', label: 'Helm chart dependencies', logo: 'helm.svg', kind: 'Helm chart', blurb: 'pinned in Chart.yaml' },
-  { id: 'fluxcd', label: 'FluxCD chart releases', logo: 'flux.svg', kind: 'Flux HelmRelease', blurb: 'HelmRelease chart versions' },
+  { id: 'helm', label: 'Helm charts', logo: 'helm.svg', kind: 'Helm chart', blurb: 'pinned in Chart.yaml' },
+  { id: 'fluxcd', label: 'FluxCD releases', logo: 'flux.svg', kind: 'Flux HelmRelease', blurb: 'HelmRelease chart versions' },
 ];
 
 // Material Icons (Apache 2.0, google/material-design-icons, 24px grid). Every glyph comes
@@ -118,6 +118,7 @@ const plural = (n, word, many) => `${n} ${n === 1 ? word : many || `${word}s`}`;
 
 async function init() {
   hydrateIcons();
+  renderKinds();
   $('scan-btn').addEventListener('click', () => triggerScan());
   $('q').addEventListener('input', (e) => { filters.q = e.target.value.trim().toLowerCase(); render(); });
   $('f-repo').addEventListener('change', (e) => { filters.repo = e.target.value; render(); });
@@ -151,6 +152,14 @@ async function init() {
   await refreshStatus();
   await loadResults();
   setInterval(pollIdle, POLL_IDLE);
+}
+
+// One link and one picker option per CATS entry, so the kinds are spelled in one place.
+function renderKinds() {
+  $('kind-links').innerHTML = CATS.map((c) => `<button class="nav-link" type="button" data-cat="${c.id}">`
+    + `${logo(c.id, true)}${esc(c.label)}<span class="nav-count" id="c-${c.id}"></span></button>`).join('');
+  $('f-cat').innerHTML = '<option value="">all kinds</option>'
+    + CATS.map((c) => `<option value="${c.id}">${esc(c.label)}</option>`).join('');
 }
 
 // The static chrome names its icons in data-icon so ICONS stays the only source of paths.
@@ -357,13 +366,12 @@ function updateStats() {
 function updateSidebar() {
   const counted = buildGroups(scoped());
   const byCat = (id) => counted.filter((g) => !id || g.type === id).length;
-  for (const id of ['', 'image', 'dockerfile', 'helm', 'fluxcd']) {
-    $(`c-${id || 'all'}`).textContent = byCat(id) || '';
-  }
+  $('c-all').textContent = byCat('') || '';
+  for (const c of CATS) $(`c-${c.id}`).textContent = byCat(c.id) || '';
   const kinds = $('f-cat');
   for (const opt of kinds.options) {
-    opt.dataset.label = opt.dataset.label || opt.textContent;
-    opt.textContent = opt.value ? `${opt.dataset.label} (${byCat(opt.value)})` : opt.dataset.label;
+    const cat = CATS.find((c) => c.id === opt.value);
+    if (cat) opt.textContent = `${cat.label} (${byCat(cat.id)})`;
   }
   kinds.value = filters.cat;
   for (const link of document.querySelectorAll('.nav-link[data-cat]')) {
