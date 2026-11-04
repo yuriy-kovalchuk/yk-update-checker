@@ -133,7 +133,11 @@ func runScan(ctx context.Context, args []string) error {
 		return err
 	}
 	defer release()
+	return scanRepos(ctx, cfg, writer)
+}
 
+// scanRepos runs the scan and writes each repository's report as it finishes; a nil writer prints JSON instead.
+func scanRepos(ctx context.Context, cfg *config.Config, writer *report.Writer) error {
 	names := repoNames(cfg)
 	var tracker *reached
 	var onRepo func(string, []scan.Result, error) error
