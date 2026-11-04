@@ -1,10 +1,6 @@
 'use strict';
 
-// Dashboard for update-checker. No build step, no dependencies: it reads
-// /api/results and /api/status. Results are tables — one row per dependency, ordered by
-// what needs action — inside cards, and each dependency opens a details row holding the
-// candidates, the facts and the workloads that use it. The console shell (app bar, nav
-// drawer, cards, chips) lives in app.css; this file builds markup and wires controls.
+// Dashboard for update-checker: no build step, no dependencies; reads /api/results and /api/status.
 
 // Each category carries its project's official logo (logos/README.md).
 const CATS = [
@@ -14,10 +10,7 @@ const CATS = [
   { id: 'fluxcd', label: 'FluxCD releases', logo: 'flux.svg', kind: 'Flux HelmRelease', blurb: 'HelmRelease chart versions' },
 ];
 
-// Material Icons (Apache 2.0, google/material-design-icons, 24px grid). Every glyph comes
-// from this table: index.html names its chrome icons in a data-icon attribute and
-// hydrateIcons() fills them, so a path exists in exactly one place and follows the theme.
-// TestDashboardIconsResolve fails on a name used but missing, or defined but unused.
+// Material Icons (Apache 2.0): every glyph in the UI, checked by TestDashboardIconsResolve.
 const ICONS = {
   arrow_forward: '<path d="m12 4-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/>',
   arrow_upward: '<path d="m4 12 1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z"/>',
@@ -63,8 +56,7 @@ const KIND_HELP = {
   unknown: 'tag could not be classified',
 };
 
-// A result's state, most urgent first: it drives the row order, the dot colour and the
-// card legend.
+// A result's state, most urgent first: it drives the row order and the colours.
 const STATES = ['error', 'major', 'drift', 'skipped', 'minor', 'patch', 'update', 'ok'];
 const STATE_LABEL = {
   error: 'failed', major: 'major', drift: 'drift', skipped: 'skipped',
@@ -78,8 +70,7 @@ const TILES = {
   drift: (r) => r.digest_changed,
   current: (r) => stateOf(r) === 'ok',
 };
-// Failure kinds (internal/errkind): a short label and what to check. Every kind
-// the server can send needs an entry; anything unknown falls back to "other".
+// Failure kinds (internal/errkind): a short label and what to check; unknown kinds read as "other".
 const ERROR_KINDS = {
   auth: ['auth failed', 'the registry or git host refused the request — check the credential (token / Secret), or whether the repo or image is private'],
   not_found: ['not found', 'the repository, chart, tag or image does not exist where the manifest says — renamed, deleted or a typo'],
@@ -228,8 +219,7 @@ function applyStatus(st) {
   banner.hidden = !st.last_error;
   if (st.last_error) {
     const text = $('scan-error-text');
-    // Per repository when the scanner says which ones failed: "repo — label
-    // (what to check)"; the raw messages stay available on hover.
+    // Per repository when the scanner names them; the raw message stays on hover.
     const repos = st.repo_errors || [];
     text.textContent = repos.length
       ? `last scan could not sync ${plural(repos.length, 'repo')}: ${repos.map((f) => {
@@ -299,8 +289,7 @@ function stateOf(r) {
 const rankOf = (state) => STATES.indexOf(state);
 const worst = (states) => states.reduce((a, b) => (rankOf(b) < rankOf(a) ? b : a), 'ok');
 
-// The repo filter scopes the whole view, tiles and drawer counts included; the others
-// narrow only the tables.
+// The repo filter scopes the whole view, counts included; the others narrow only the tables.
 function renderRepoFilter() {
   const sel = $('f-repo');
   const repos = [...new Set(results.map((r) => r.source).filter(Boolean))].sort();
@@ -324,8 +313,7 @@ function matches(r) {
     .includes(filters.q);
 }
 
-// One group per dependency; inside it one detail block per distinct current tag, each
-// carrying every workload that uses that tag.
+// One group per dependency, holding one line per distinct current tag with every workload using it.
 function buildGroups(rows) {
   const groups = new Map();
   for (const r of rows) {
@@ -358,8 +346,7 @@ function updateStats() {
   }
 }
 
-// The drawer restates the same filters the tables use, each with the count it would show: within the
-// repository only, because choosing a link replaces everything else.
+// Each drawer link shows the count it would show, within the chosen repository.
 function updateSidebar() {
   const counted = buildGroups(scoped());
   const byCat = (id) => counted.filter((g) => !id || g.type === id).length;
@@ -597,8 +584,7 @@ function detailFor(l) {
 
 const fact = (k, v) => `<dt>${k}</dt><dd>${v}</dd>`;
 
-// logo is the category's project logo; decorative next to its own label,
-// otherwise it names the kind of file the row came from.
+// The kind's project logo: decorative beside its label, otherwise named after the kind.
 function logo(type, decorative) {
   const cat = CATS.find((c) => c.id === type);
   if (!cat) return '';
@@ -606,8 +592,7 @@ function logo(type, decorative) {
   return `<img class="logo" src="/assets/logos/${cat.logo}" ${label}>`;
 }
 
-// The note repeats each skipped tag as "skipped <tag>: <reasons>"; the details row
-// already lists those, so only the rest of the note is worth showing.
+// The note minus the skipped-tag reasons, which the details row already lists.
 function otherNote(r) {
   let note = r.note || '';
   for (const s of r.skipped || []) {

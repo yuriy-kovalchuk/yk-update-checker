@@ -1,9 +1,4 @@
-// Theme preference: system → light → dark. Loaded in <head> without defer so data-theme
-// is set before the stylesheet paints and a dark choice never flashes white.
-//
-// "system" follows the OS and tracks it live. The choice is per browser, so it lives in
-// localStorage, which can be unavailable (private mode, blocked storage) and then lasts
-// the page view.
+// Theme preference (system → light → dark), applied before the stylesheet paints.
 (function () {
   'use strict';
   var root = document.documentElement;

@@ -1,13 +1,4 @@
-/* Update Checker dashboard — Material / Google Cloud console style, the same system
- * talos-monitoring uses: colour roles as tokens (light in :root, dark in
- * [data-theme="dark"]), outlined cards on a neutral page, tonal status chips, a nav
- * drawer under a sticky app bar. Roboto for UI text, Roboto Mono for technical
- * values. theme.js sets data-theme before the first paint.
- *
- * The CSP is default-deny with img-src 'self' (internal/middleware), so nothing here
- * may reference a data: URI or a CDN: chevrons are CSS gradients and every icon is an
- * inline SVG driven by .icon.
- */
+/* Update Checker dashboard, Google Cloud console style; the CSP allows no data: URI or CDN here. */
 
 @font-face {
   font-family: "Roboto";
@@ -138,8 +129,7 @@ code {
 [data-theme-pref="light"] .ti-light,
 [data-theme-pref="dark"] .ti-dark { display: block; }
 
-/* Every glyph in the UI is an inline SVG Material icon (ICONS in app.js), sized and
-   coloured by this rule so the same path serves the drawer, the tiles and a table cell. */
+/* Every glyph is an inline SVG from ICONS in app.js, sized and coloured here. */
 .icon {
   flex: none;
   width: 20px;
@@ -148,8 +138,7 @@ code {
   vertical-align: -0.25em;
 }
 
-/* Placeholder for an icon app.js fills from ICONS; display: contents keeps it out of
-   the parent's flex/grid layout, so the svg it holds positions as if it were inline. */
+/* An icon placeholder app.js fills; display: contents lays its svg out as if inline. */
 [data-icon] { display: contents; }
 
 /* ── Top app bar ─────────────────────────────────────────────────────── */
@@ -371,10 +360,7 @@ kbd {
 }
 .select:hover { background-color: var(--surface-hover); }
 
-/* CNCF project logos (logos/README.md) name the kind of manifest a row came from. The
-   console draws every mark in one colour, so the logos are flattened to one too; the
-   SVG files stay untouched, which also settles the white Helm variant the old dark-only
-   theme needed. */
+/* CNCF logos (logos/README.md), flattened to one colour like every console mark. */
 .logo {
   flex: none;
   width: 20px;
@@ -387,8 +373,7 @@ kbd {
 /* ── Content column ──────────────────────────────────────────────────── */
 
 .content {
-  /* min-width: 0 lets a wide table scroll inside its card instead of widening this
-     grid item and scrolling the whole page sideways. */
+  /* min-width: 0 lets a wide table scroll inside its card, not the page sideways. */
   min-width: 0;
   width: 100%;
   max-width: min(1280px, 100%);
@@ -797,8 +782,7 @@ tbody tr.detail-row:last-child td { border-bottom: none; }
 /* ── Responsive ──────────────────────────────────────────────────────── */
 
 @media (max-width: 880px) {
-  /* The Notes chips repeat what the version and the state already say; shed them before
-     the table needs a scrollbar. Below 640 they come back beside the status. */
+  /* Notes repeat the version and state, so they go first; below 640 they return beside the status. */
   .col-notes { display: none; }
 }
 

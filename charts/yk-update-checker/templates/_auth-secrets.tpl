@@ -51,7 +51,6 @@
 {{- end }}
 {{- end -}}
 
-{{/* scanner.config with every auth.existingSecret rewritten into the *_file path the scanner reads. */}}
 {{/* A 0440 credential is readable by the non-root pod only through fsGroup; refuse to render without one. */}}
 {{- define "yk-update-checker.requireCredFsGroup" -}}
 {{- if and (.fsGroup | empty) .creds -}}
@@ -121,6 +120,7 @@
 
 {{- define "yk-update-checker.registryAuthDir" -}}/etc/update-checker-scanner/registry{{- end -}}
 
+{{/* scanner.config with every auth.existingSecret rewritten into the *_file path the scanner reads. */}}
 {{- define "yk-update-checker.scannerConfig" -}}
 {{- $cfg := deepCopy .Values.scanner.config -}}
 {{- if (mustFromJson (include "yk-update-checker.registryAuth" .)) -}}

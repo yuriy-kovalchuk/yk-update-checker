@@ -23,8 +23,7 @@
     <span class="version-chip" id="version-text">v?</span>
   </span>
   <div class="topbar-right">
-    <!-- aria-live belongs on this small status element, not on the polled lists: they
-         re-render wholesale, so announcing them would read the page aloud every poll. -->
+    <!-- aria-live sits here, not on the polled lists, which re-render wholesale every poll. -->
     <span class="pill" id="status-chip" role="status" aria-live="polite">
       <span class="pill-dot"></span><span>connecting</span>
     </span>

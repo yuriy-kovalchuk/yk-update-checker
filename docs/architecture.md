@@ -148,8 +148,9 @@ Constraints that are not taste:
   fails on a name that is missing or unused. Logos are SVG files drawn monochrome by a CSS
   filter, which is what lets the white Helm mark survive a white card.
 - **The theme is set before the first paint.** `theme.js` loads in `<head>` without `defer` and
-  writes `data-theme` (`system` follows the OS); `app.js` is deferred because its output is the
-  data, not the page.
+  writes `data-theme` (`system` follows the OS and tracks it live); `app.js` is deferred because
+  its output is the data, not the page. The choice is per browser, in `localStorage`; where
+  storage is unavailable it lasts the page view.
 - **A clickable thing is found by its attribute, not its class.** The state chips carry
   `data-tile` and a dependency row carries `data-key`; the handlers match those, so restyling a
   figure cannot silently detach its filter (`TestSummaryFiguresMatchTheTileFilters` keeps the
