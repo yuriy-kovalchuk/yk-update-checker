@@ -216,14 +216,13 @@ function applyScanBtn(st) {
 
 function applyStatus(st) {
   $('version-text').textContent = st.version || 'dev';
-  $('foot-version').textContent = st.version || 'dev';
   applyScanBtn(st);
 
   if (st.scanning) setChip('', 'scanning', 'refresh');
   else if (st.last_error) setChip('pill-down', 'last scan failed', 'error');
   else setChip('pill-ok', 'idle');
 
-  $('last-scan-text').textContent = st.last_scan_at ? relTime(st.last_scan_at) : 'never';
+  renderLastScan();
 
   const banner = $('scan-error');
   banner.hidden = !st.last_error;
@@ -240,7 +239,6 @@ function applyStatus(st) {
       : `last scan ${st.last_error_kind && st.last_error_kind !== 'other' ? `failed (${errLabel(st.last_error_kind)})` : 'reported'}: ${st.last_error}`;
     text.title = st.last_error;
   }
-  renderFooter();
 }
 
 async function triggerScan() {
@@ -286,7 +284,6 @@ async function pollIdle() {
   const before = status.last_scan_at || '';
   const st = await refreshStatus();
   if (st && !st.scanning && (st.last_scan_at || '') !== before) await loadResults();
-  renderFooter();
 }
 
 // ---------- model ----------
@@ -390,17 +387,16 @@ function renderCount(rows, groups) {
     + ` · ${plural(groups.length, 'dependency', 'dependencies')}`;
 }
 
-function renderFooter() {
-  // The scan time is the scanner's own clock; a stored dependency's timestamp only moves when that reference changes.
-  $('foot-checked').textContent = status.last_scan_at ? relTime(status.last_scan_at) : 'never';
-  $('foot-refresh').textContent = `${Math.round(POLL_IDLE / 1000)}s`;
+// The scanner's own clock: a stored dependency's timestamp only moves when that reference changes.
+function renderLastScan() {
+  $('last-scan-text').textContent = status.last_scan_at ? relTime(status.last_scan_at) : 'never';
 }
 
 // ---------- rendering ----------
 
 function render() {
   updateStats();
-  renderFooter();
+  renderLastScan();
   const rows = results.filter(matches);
   const groups = buildGroups(rows);
   currentGroups = groups.filter((g) => g.state === 'ok');
