@@ -11,9 +11,12 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 )
 
+// dockerHubHost is the host Docker Hub's registry API answers on; name.DefaultRegistry is its index alias.
+const dockerHubHost = "registry-1.docker.io"
+
 // publicRegistryHosts never speak a vendor tag API, so the date and digest look-ups below skip them.
 var publicRegistryHosts = map[string]bool{
-	"index.docker.io": true, "registry-1.docker.io": true, "ghcr.io": true,
+	name.DefaultRegistry: true, dockerHubHost: true, "ghcr.io": true,
 	"gcr.io": true, "k8s.gcr.io": true, "registry.k8s.io": true,
 	"mcr.microsoft.com": true, "public.ecr.aws": true, "data.forgejo.org": true,
 }
@@ -36,10 +39,10 @@ type vendorAPI struct {
 
 // defaultVendorAPIs pins the base URL of every known vendor tag API.
 var defaultVendorAPIs = map[string]vendorAPI{
-	"index.docker.io":      {kind: apiDocker, base: "https://hub.docker.com"},
-	"registry-1.docker.io": {kind: apiDocker, base: "https://hub.docker.com"},
-	"quay.io":              {kind: apiQuay, base: "https://quay.io"},
-	"quay.redhat.com":      {kind: apiQuay, base: "https://quay.redhat.com"},
+	name.DefaultRegistry: {kind: apiDocker, base: "https://hub.docker.com"},
+	dockerHubHost:        {kind: apiDocker, base: "https://hub.docker.com"},
+	"quay.io":            {kind: apiQuay, base: "https://quay.io"},
+	"quay.redhat.com":    {kind: apiQuay, base: "https://quay.redhat.com"},
 }
 
 func vendorAPIFor(scheme, host string) vendorAPI {

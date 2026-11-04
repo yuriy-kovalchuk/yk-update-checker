@@ -73,7 +73,7 @@ func registryHost(key string) string {
 	}
 	key, _, _ = strings.Cut(key, "/")
 	switch key {
-	case "docker.io", "registry-1.docker.io":
+	case "docker.io", dockerHubHost:
 		return name.DefaultRegistry
 	}
 	return key

@@ -180,7 +180,8 @@ func gitEnv(pairs [][2]string) []string {
 
 // gitConfig encodes config pairs the way git reads them from the environment: GIT_CONFIG_COUNT plus indexed KEY/VALUE pairs.
 func gitConfig(pairs [][2]string) []string {
-	out := []string{fmt.Sprintf("GIT_CONFIG_COUNT=%d", len(pairs))}
+	out := make([]string, 0, 1+2*len(pairs))
+	out = append(out, fmt.Sprintf("GIT_CONFIG_COUNT=%d", len(pairs)))
 	for i, kv := range pairs {
 		out = append(out,
 			fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", i, kv[0]),
