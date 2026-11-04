@@ -128,6 +128,42 @@ The kind travels as `check_error_kind` on each result, and as `status.error.kind
 
 Fetched registry data (Helm `index.yaml` files, OCI tag lists) is cached in a `registry.IndexCache`, and every scan deduplicates lookups per unique registry URL (singleflight + memoized errors). The cache lives for one scan: each scan is a process of its own, so a TTL would only pin memory between runs.
 
+## Dashboard UI
+
+The dashboard is a single embedded page (`internal/dashboard/ui/`) with no build step and no
+CDN: Roboto and Roboto Mono are vendored under `/fonts/`, CNCF project logos under
+`/assets/logos/`, and everything else the page draws is an inline SVG. Its look is the Google
+Cloud console — colour roles as tokens defined twice (`:root` light, `[data-theme="dark"]`), an
+app bar over a nav drawer, a row of state filter chips, outlined cards holding tables,
+and tonal chips for state — the same system `talos-monitoring` uses, so a change to one
+dashboard should be considered for the other.
+
+Constraints that are not taste:
+
+- **No `data:` URIs and no inline script or handlers.** The CSP is `default-src 'self'` with
+  `img-src 'self'` and `script-src 'self'`, so a chevron is a CSS gradient and an inline
+  `onclick=` is dropped in silence (`TestNoInlineScriptOrHandlers`).
+- **One glyph, one place.** Every icon comes from `ICONS` in `app.js`; `index.html` names its
+  chrome icons in `data-icon` and `hydrateIcons()` fills them. `TestDashboardIconsResolve`
+  fails on a name that is missing or unused. Logos are SVG files drawn monochrome by a CSS
+  filter, which is what lets the white Helm mark survive a white card.
+- **The theme is set before the first paint.** `theme.js` loads in `<head>` without `defer` and
+  writes `data-theme` (`system` follows the OS); `app.js` is deferred because its output is the
+  data, not the page.
+- **A clickable thing is found by its attribute, not its class.** The state chips carry
+  `data-tile` and a dependency row carries `data-key`; the handlers match those, so restyling a
+  figure cannot silently detach its filter (`TestSummaryFiguresMatchTheTileFilters` keeps the
+  figures and the `TILES` table in step).
+- **Narrow screens reflow instead of scrolling sideways.** Below 900px the drawer becomes one
+  row of filters above the content — a segmented view toggle, the repository picker and a
+  reference-kind `<select>` (`#f-cat`) that stands in for the kind links; below 640px a dependency becomes a stacked row (status
+  with its chips, reference, versions) and the Notes chips return there — the 880px rule that
+  drops that column only covers widths where the row still fits one line.
+- **The state counts are Material filter chips, not figures.** One chip per `TILES` filter; a
+  chip whose count is 0 hides unless it is the active filter, and the total is the "N checks"
+  line beside the search, so there is no separate Checked figure. A chip's colour comes from its
+  state's `--state` / `--state-text` / `--state-container` tokens.
+
 ## Monitoring & alerting
 
 The dashboard mounts a Prometheus `/metrics` endpoint. Label values that come from repository content pass through `bound()`: invalid UTF-8 is replaced and long values are cut on a character boundary, because a single label value Prometheus rejects turns the whole scrape into a 500.

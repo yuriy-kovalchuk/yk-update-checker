@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -83,7 +84,9 @@ func TestStaticAssetsServed(t *testing.T) {
 	}{
 		{"/assets/app.css", "text/css"},
 		{"/assets/app.js", "text/javascript"},
-		{"/fonts/JetBrainsMonoNF-Regular.woff2", "font/woff2"},
+		{"/assets/theme.js", "text/javascript"},
+		{"/fonts/roboto-latin-var.woff2", "font/woff2"},
+		{"/fonts/roboto-mono-latin-var.woff2", "font/woff2"},
 	}
 	mux := newTestMux(report.Snapshot{}, fakeTrigger{})
 
@@ -207,6 +210,131 @@ func TestTriggerResponses(t *testing.T) {
 		if got := get(newTestMux(report.Snapshot{}, tc.trig), http.MethodPost, "/api/scan/trigger").Code; got != tc.want {
 			t.Errorf("%+v: status %d, want %d", tc.trig, got, tc.want)
 		}
+	}
+}
+
+// TestThemeScriptRunsBeforeTheStylesheet: without it a dark preference paints white first, because
+// theme.js sets data-theme synchronously in <head> and app.js is deferred.
+func TestThemeScriptRunsBeforeTheStylesheet(t *testing.T) {
+	html := readUI(t, "ui/index.html")
+	script := strings.Index(html, `src="/assets/theme.js"`)
+	style := strings.Index(html, `href="/assets/app.css"`)
+	if script < 0 || style < 0 {
+		t.Fatal("index.html links neither /assets/theme.js nor /assets/app.css")
+	}
+	if script > style {
+		t.Error("theme.js is linked after the stylesheet, so the first paint can use the wrong palette")
+	}
+	tag := html[strings.LastIndex(html[:script], "<script"):script]
+	if strings.Contains(tag, "defer") || strings.Contains(tag, "async") {
+		t.Error("theme.js must not be deferred or async: it sets data-theme before the first paint")
+	}
+}
+
+// TestNoInlineScriptOrHandlers: the CSP is script-src 'self', so an inline handler is dropped
+// silently and the control just stops working.
+func TestNoInlineScriptOrHandlers(t *testing.T) {
+	for _, name := range []string{"ui/index.html", "ui/app.js", "ui/app.css"} {
+		body := readUI(t, name)
+		for _, tag := range regexp.MustCompile(`<script[^>]*>`).FindAllString(body, -1) {
+			if !strings.Contains(tag, "src=") {
+				t.Errorf("%s has a <script> without src: %s", name, tag)
+			}
+		}
+		if regexp.MustCompile(`\son[a-z]+=`).MatchString(body) {
+			t.Errorf("%s has an inline event handler", name)
+		}
+	}
+}
+
+// TestDashboardIconsResolve keeps every glyph app.js and index.html ask for in app.js's ICONS table,
+// and keeps the table free of paths nothing draws. An unknown name renders no icon at all, and the
+// theme toggle is the only place a glyph lives outside the table.
+func TestDashboardIconsResolve(t *testing.T) {
+	js := readUI(t, "ui/app.js")
+	html := readUI(t, "ui/index.html")
+
+	start := strings.Index(js, "const ICONS = {")
+	if start < 0 {
+		t.Fatal("ICONS table not found in app.js")
+	}
+	end := strings.Index(js[start:], "\n};")
+	if end < 0 {
+		t.Fatal("ICONS table is not closed")
+	}
+	table, rest := js[start:start+end], js[start+end:]
+
+	defined := map[string]bool{}
+	for _, line := range strings.Split(table, "\n") {
+		key, _, found := strings.Cut(strings.TrimSpace(line), ":")
+		if found && regexp.MustCompile(`^[a-z_]+$`).MatchString(key) {
+			defined[key] = true
+		}
+	}
+	if len(defined) < 10 {
+		t.Fatalf("ICONS table holds %d entries; expected the UI's glyph set", len(defined))
+	}
+
+	for _, call := range regexp.MustCompile(`ic\(([^)]*)\)`).FindAllStringSubmatch(js, -1) {
+		name := regexp.MustCompile(`'([a-z_]+)'`).FindStringSubmatch(call[1])
+		if name != nil && !defined[name[1]] {
+			t.Errorf("app.js draws ic(%q), which ICONS does not define", name[1])
+		}
+	}
+	for _, name := range regexp.MustCompile(`data-icon="([a-z_]+)"`).FindAllStringSubmatch(html, -1) {
+		if !defined[name[1]] {
+			t.Errorf("index.html asks for data-icon %q, which ICONS does not define", name[1])
+		}
+	}
+	for key := range defined {
+		if strings.Contains(rest, "'"+key+"'") || strings.Contains(rest, "'ic:"+key+"'") ||
+			strings.Contains(html, `data-icon="`+key+`"`) {
+			continue
+		}
+		t.Errorf("ICONS defines %q, which nothing draws", key)
+	}
+}
+
+func readUI(t *testing.T, name string) string {
+	t.Helper()
+	b, err := fs.ReadFile(uiFS, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// TestSummaryFiguresMatchTheTileFilters: the state chips offer one chip per filter in app.js's
+// TILES table, and a chip carries the key both the click handler and the counts read from it.
+func TestSummaryFiguresMatchTheTileFilters(t *testing.T) {
+	html := readUI(t, "ui/index.html")
+	js := readUI(t, "ui/app.js")
+
+	start := strings.Index(js, "const TILES = {")
+	if start < 0 {
+		t.Fatal("TILES table not found in app.js")
+	}
+	table := js[start:]
+	table = table[:strings.Index(table, "};")]
+
+	filters := 0
+	for _, line := range strings.Split(table, "\n") {
+		key, _, found := strings.Cut(strings.TrimSpace(line), ":")
+		if found && regexp.MustCompile(`^[a-z]+$`).MatchString(key) {
+			filters++
+			if !strings.Contains(html, `data-tile="`+key+`"`) {
+				t.Errorf("index.html has no state chip for the %q filter", key)
+			}
+		}
+	}
+	if filters < 2 {
+		t.Fatalf("TILES holds %d filters; expected the summary's set", filters)
+	}
+	for _, m := range regexp.MustCompile(`data-tile="([a-z]*)"`).FindAllStringSubmatch(html, -1) {
+		if m[1] == "" || strings.Contains(table, "\n  "+m[1]+": ") {
+			continue // an empty key would clear the filter instead of naming one
+		}
+		t.Errorf("index.html offers the %q chip, which TILES does not filter by", m[1])
 	}
 }
 
