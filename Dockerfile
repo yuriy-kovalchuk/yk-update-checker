@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/root/.cache/go-build \
@@ -20,9 +20,9 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     -o /update-checker ./cmd/update-checker
 
 # Runtime pinned by digest: this image's git reads every credential (refresh: docker buildx imagetools inspect alpine/git:<tag>).
-FROM alpine/git:v2.54.0@sha256:e8ceedc73bd80992ae8d58a7d24c58b8322146c354f1d2e81a97db4452068ec0
-# The base froze libcurl at its own build date (8.22.0-r0, CVE-2026-92392); apk resolves it at ours instead.
-RUN apk add --no-cache --upgrade libcurl
+FROM alpine/git:v2.54.0@sha256:6a1fdb962814ca11508ca8d1bab94375b5b7ac4e4a9a40981c29fc32c02f095d
+# The base froze its packages at its own build date (git 2.54.0-r0 still carries CVE-2026-105437); apk resolves them at ours instead.
+RUN apk upgrade --no-cache
 LABEL org.opencontainers.image.title="yk-update-checker" \
       org.opencontainers.image.description="Scans GitOps repos for outdated Helm chart and FluxCD dependencies" \
       org.opencontainers.image.source="https://github.com/yuriy-kovalchuk/yk-update-checker" \

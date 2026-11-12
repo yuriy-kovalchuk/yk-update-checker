@@ -4,7 +4,7 @@ Finds outdated dependencies in your GitOps repositories: Helm chart dependencies
 `HelmRelease` charts, container images in Kubernetes manifests and `FROM` lines in Dockerfiles.
 Results show up in a web UI, as Prometheus metrics and alerts, and as Kubernetes resources.
 
-![The update-checker web dashboard: summary tiles, filters, and outdated references grouped by what needs attention](docs/assets/Dashboard.png)
+![The update-checker web dashboard: summary tiles, a nav drawer of filters, and outdated references in one table per group](docs/assets/Dashboard.png)
 
 ## How it works
 

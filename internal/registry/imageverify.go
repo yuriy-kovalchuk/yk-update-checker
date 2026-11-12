@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // SkippedTag is a tag that outranks the current one by version but was rejected as a stray rather than a release.
@@ -128,54 +129,79 @@ type candidateSignals struct {
 
 func (c *IndexCache) candidateSignals(ctx context.Context, bl *verifyBaseline, cand tagShape, tags []string) candidateSignals {
 	var s candidateSignals
-
-	// 1. Push date.
-	if info, ok := bl.vendorInfo(cand.Raw); ok && info.HasDate && bl.infoOK && bl.info.HasDate &&
-		bl.info.Pushed.Sub(info.Pushed) > c.limits.pushGapSignal {
-		s.soft = append(s.soft, fmt.Sprintf("pushed %s, before %s pushed %s",
-			info.Pushed.Format("2006-01-02"), bl.cur.Raw, bl.info.Pushed.Format("2006-01-02")))
-	}
-
+	s.pushDate(bl, cand, c.limits.pushGapSignal)
 	// Manifest plus config blob: shared by the label, shape, alias and (through the digest) signature signals.
 	meta, err := c.imageMeta(ctx, bl.repository, cand.Raw, "")
 	metaOK := err == nil
-
-	// 2. The OCI version label has to name the candidate.
 	if metaOK {
-		label := strings.TrimPrefix(meta.Version, "v")
-		if label != "" && label != strings.TrimPrefix(cand.Raw, "v") &&
-			(label == strings.TrimPrefix(bl.cur.Raw, "v") || slices.Contains(tags, label)) {
-			s.hard = append(s.hard, fmt.Sprintf("image metadata claims version %s", meta.Version))
-		}
+		s.versionLabel(bl, cand, meta, tags)
 	}
-
-	// 3. A real release has siblings in its series: other patches, pre-releases or arch-suffixed builds.
-	sibs := siblingsOf(cand, tags)
-	if len(sibs) == 0 {
-		sibs = siblingsOf(cand, c.siblingPage(ctx, bl.repository, cand))
-	}
-	if len(sibs) == 0 {
-		s.soft = append(s.soft, "no sibling tags")
-	}
-
-	// 4. A candidate that jumps several majors with nothing listed in between moved too far to be a release.
+	s.siblings(c.siblingsWithPage(ctx, bl, cand, tags))
 	if from, to, jumped := majorJump(bl.cur, cand, tags); jumped {
 		s.soft = append(s.soft, fmt.Sprintf("skips v%d..v%d, none of them listed", from, to))
 	}
-
-	// 5. Manifest shape: a single-platform candidate where the current tag is multi-arch is the signature of an ad-hoc build.
-	if metaOK && bl.meta.multiArch() {
-		switch {
-		case !meta.IsIndex:
-			s.soft = append(s.soft, fmt.Sprintf("single-arch, %s ships %s",
-				bl.cur.Raw, strings.Join(bl.meta.Platforms, ",")))
-		case strictSubset(bl.meta.Platforms, meta.Platforms):
-			s.soft = append(s.soft, fmt.Sprintf("covers only %s of the %d platforms %s ships",
-				strings.Join(meta.Platforms, ","), len(bl.meta.Platforms), bl.cur.Raw))
+	if metaOK {
+		s.manifestShape(bl, meta)
+	}
+	s.aliases(bl, cand, meta)
+	if metaOK && bl.signed != nil && *bl.signed {
+		if signed, ok := c.hasSignatures(ctx, bl.repository, meta.Digest); ok && !signed {
+			s.soft = append(s.soft, "unsigned, while "+bl.cur.Raw+" is signed")
 		}
 	}
+	return s
+}
 
-	// 6. The same digest as another tag makes this tag an alias, not a build.
+// pushDate: a candidate pushed well before the current tag is not the newer release it claims to be.
+func (s *candidateSignals) pushDate(bl *verifyBaseline, cand tagShape, gap time.Duration) {
+	if info, ok := bl.vendorInfo(cand.Raw); ok && info.HasDate && bl.infoOK && bl.info.HasDate &&
+		bl.info.Pushed.Sub(info.Pushed) > gap {
+		s.soft = append(s.soft, fmt.Sprintf("pushed %s, before %s pushed %s",
+			info.Pushed.Format("2006-01-02"), bl.cur.Raw, bl.info.Pushed.Format("2006-01-02")))
+	}
+}
+
+// versionLabel: the OCI version label has to name the candidate.
+func (s *candidateSignals) versionLabel(bl *verifyBaseline, cand tagShape, meta imageMeta, tags []string) {
+	label := strings.TrimPrefix(meta.Version, "v")
+	if label != "" && label != strings.TrimPrefix(cand.Raw, "v") &&
+		(label == strings.TrimPrefix(bl.cur.Raw, "v") || slices.Contains(tags, label)) {
+		s.hard = append(s.hard, fmt.Sprintf("image metadata claims version %s", meta.Version))
+	}
+}
+
+// siblingsWithPage finds the candidate's series in the listed tags, or else in a page fetched for it.
+func (c *IndexCache) siblingsWithPage(ctx context.Context, bl *verifyBaseline, cand tagShape, tags []string) []string {
+	if sibs := siblingsOf(cand, tags); len(sibs) > 0 {
+		return sibs
+	}
+	return siblingsOf(cand, c.siblingPage(ctx, bl.repository, cand))
+}
+
+// siblings: a real release has siblings in its series (other patches, pre-releases or arch-suffixed builds).
+func (s *candidateSignals) siblings(sibs []string) {
+	if len(sibs) == 0 {
+		s.soft = append(s.soft, "no sibling tags")
+	}
+}
+
+// manifestShape: a single-platform candidate where the current tag is multi-arch is the signature of an ad-hoc build.
+func (s *candidateSignals) manifestShape(bl *verifyBaseline, meta imageMeta) {
+	if !bl.meta.multiArch() {
+		return
+	}
+	switch {
+	case !meta.IsIndex:
+		s.soft = append(s.soft, fmt.Sprintf("single-arch, %s ships %s",
+			bl.cur.Raw, strings.Join(bl.meta.Platforms, ",")))
+	case strictSubset(bl.meta.Platforms, meta.Platforms):
+		s.soft = append(s.soft, fmt.Sprintf("covers only %s of the %d platforms %s ships",
+			strings.Join(meta.Platforms, ","), len(bl.meta.Platforms), bl.cur.Raw))
+	}
+}
+
+// aliases: the same digest as another tag makes this tag an alias, not a build.
+func (s *candidateSignals) aliases(bl *verifyBaseline, cand tagShape, meta imageMeta) {
 	var strays []string
 	for _, other := range bl.aliases(meta.Digest, cand.Raw) {
 		s.info = append(s.info, "alias of "+other)
@@ -194,14 +220,6 @@ func (c *IndexCache) candidateSignals(ctx context.Context, bl *verifyBaseline, c
 	if len(strays) > 0 {
 		s.soft = append(s.soft, "same digest as "+strings.Join(strays, ", "))
 	}
-
-	// 7. Unsigned where the current tag is signed. If the current tag carries no signatures there is nothing to compare against.
-	if metaOK && bl.signed != nil && *bl.signed {
-		if signed, ok := c.hasSignatures(ctx, bl.repository, meta.Digest); ok && !signed {
-			s.soft = append(s.soft, "unsigned, while "+bl.cur.Raw+" is signed")
-		}
-	}
-	return s
 }
 
 // ownPreRelease reports whether other names the candidate's own version as a pre-release: 9.2.0-rc1 beside 9.2.

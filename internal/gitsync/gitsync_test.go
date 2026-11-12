@@ -381,3 +381,33 @@ func TestSyncErrorsCarryKinds(t *testing.T) {
 		t.Errorf("unresolvable host: kind = %q (%v), want unreachable", errkind.Of(err), err)
 	}
 }
+
+// TestSyncDeadlineIsNotDelayedByADescendant: a git killed by its deadline leaves its helper (git-remote-https) holding
+// the output pipe, so the call must stop waiting at its deadline plus the drain, not at the helper's own timeout.
+func TestSyncDeadlineIsNotDelayedByADescendant(t *testing.T) {
+	const deadline = time.Second
+	dir := t.TempDir()
+	shim := filepath.Join(dir, "git")
+	// A stand-in git that names itself, outlives its deadline, and leaves a child holding the output pipe open.
+	if err := os.WriteFile(shim, []byte("#!/bin/sh\necho shim >&2\nsleep 8 &\nsleep 8\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
+	defer cancel()
+	repo := config.Repo{Name: "r", URL: "https://example.invalid/r.git"}
+	start := time.Now()
+	err := New(DefaultCommandTimeout).Sync(ctx, repo, filepath.Join(t.TempDir(), "d"))
+	elapsed := time.Since(start)
+
+	if err == nil || !strings.Contains(err.Error(), "shim") {
+		t.Fatalf("the stand-in git did not run: %v", err)
+	}
+	if errkind.Of(err) != errkind.Timeout {
+		t.Errorf("kind = %q (%v), want timeout", errkind.Of(err), err)
+	}
+	if limit := deadline + outputDrainTimeout + 2*time.Second; elapsed > limit {
+		t.Errorf("Sync took %s, over the %s limit: it waited for the descendant's pipe, not for git", elapsed, limit)
+	}
+}

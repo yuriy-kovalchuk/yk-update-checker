@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -83,7 +84,9 @@ func TestStaticAssetsServed(t *testing.T) {
 	}{
 		{"/assets/app.css", "text/css"},
 		{"/assets/app.js", "text/javascript"},
-		{"/fonts/JetBrainsMonoNF-Regular.woff2", "font/woff2"},
+		{"/assets/theme.js", "text/javascript"},
+		{"/fonts/roboto-latin-var.woff2", "font/woff2"},
+		{"/fonts/roboto-mono-latin-var.woff2", "font/woff2"},
 	}
 	mux := newTestMux(report.Snapshot{}, fakeTrigger{})
 
@@ -169,27 +172,36 @@ func TestAPIResponsesAreNotCacheable(t *testing.T) {
 	}
 }
 
-// TestDashboardFooterUsesTheScanTime: a stored dependency's checked_at only moves when that reference changes, so it cannot say when the scan ran.
-func TestDashboardFooterUsesTheScanTime(t *testing.T) {
+// TestUIResponsesAreNotCacheable: a proxy in front of the Service must not answer the page or its icon from cache either.
+func TestUIResponsesAreNotCacheable(t *testing.T) {
+	for _, path := range []string{"/", "/favicon.svg"} {
+		if cc := get(newTestMux(report.Snapshot{}, fakeTrigger{}), http.MethodGet, path).Header().Get("Cache-Control"); cc != "no-store" {
+			t.Errorf("%s Cache-Control = %q, want no-store", path, cc)
+		}
+	}
+}
+
+// TestDashboardShowsTheScanTime: a stored dependency's checked_at only moves when that reference changes, so it cannot say when the scan ran.
+func TestDashboardShowsTheScanTime(t *testing.T) {
 	js, err := fs.ReadFile(uiFS, "ui/app.js")
 	if err != nil {
 		t.Fatal(err)
 	}
-	start := bytes.Index(js, []byte("function renderFooter()"))
+	start := bytes.Index(js, []byte("function renderLastScan()"))
 	if start < 0 {
-		t.Fatal("renderFooter not found in app.js")
+		t.Fatal("renderLastScan not found in app.js")
 	}
 	body := js[start:]
 	end := bytes.Index(body, []byte("\n}"))
 	if end < 0 {
-		t.Fatal("renderFooter is not a function")
+		t.Fatal("renderLastScan is not a function")
 	}
 	body = body[:end]
 	if !bytes.Contains(body, []byte("last_scan_at")) {
-		t.Error("renderFooter does not use status.last_scan_at")
+		t.Error("renderLastScan does not use status.last_scan_at")
 	}
 	if bytes.Contains(body, []byte("checked_at")) {
-		t.Error("renderFooter still infers the scan time from a dependency's checked_at")
+		t.Error("renderLastScan infers the scan time from a dependency's checked_at")
 	}
 }
 
@@ -210,6 +222,131 @@ func TestTriggerResponses(t *testing.T) {
 	}
 }
 
+// TestThemeScriptRunsBeforeTheStylesheet: without it a dark preference paints white first, because
+// theme.js sets data-theme synchronously in <head> and app.js is deferred.
+func TestThemeScriptRunsBeforeTheStylesheet(t *testing.T) {
+	html := readUI(t, "ui/index.html")
+	script := strings.Index(html, `src="/assets/theme.js"`)
+	style := strings.Index(html, `href="/assets/app.css"`)
+	if script < 0 || style < 0 {
+		t.Fatal("index.html links neither /assets/theme.js nor /assets/app.css")
+	}
+	if script > style {
+		t.Error("theme.js is linked after the stylesheet, so the first paint can use the wrong palette")
+	}
+	tag := html[strings.LastIndex(html[:script], "<script"):script]
+	if strings.Contains(tag, "defer") || strings.Contains(tag, "async") {
+		t.Error("theme.js must not be deferred or async: it sets data-theme before the first paint")
+	}
+}
+
+// TestNoInlineScriptOrHandlers: the CSP is script-src 'self', so an inline handler is dropped
+// silently and the control just stops working.
+func TestNoInlineScriptOrHandlers(t *testing.T) {
+	for _, name := range []string{"ui/index.html", "ui/app.js", "ui/app.css"} {
+		body := readUI(t, name)
+		for _, tag := range regexp.MustCompile(`<script[^>]*>`).FindAllString(body, -1) {
+			if !strings.Contains(tag, "src=") {
+				t.Errorf("%s has a <script> without src: %s", name, tag)
+			}
+		}
+		if regexp.MustCompile(`\son[a-z]+=`).MatchString(body) {
+			t.Errorf("%s has an inline event handler", name)
+		}
+	}
+}
+
+// TestDashboardIconsResolve keeps every glyph app.js and index.html ask for in app.js's ICONS table,
+// and keeps the table free of paths nothing draws. An unknown name renders no icon at all, and the
+// theme toggle is the only place a glyph lives outside the table.
+func TestDashboardIconsResolve(t *testing.T) {
+	js := readUI(t, "ui/app.js")
+	html := readUI(t, "ui/index.html")
+
+	start := strings.Index(js, "const ICONS = {")
+	if start < 0 {
+		t.Fatal("ICONS table not found in app.js")
+	}
+	end := strings.Index(js[start:], "\n};")
+	if end < 0 {
+		t.Fatal("ICONS table is not closed")
+	}
+	table, rest := js[start:start+end], js[start+end:]
+
+	defined := map[string]bool{}
+	for _, line := range strings.Split(table, "\n") {
+		key, _, found := strings.Cut(strings.TrimSpace(line), ":")
+		if found && regexp.MustCompile(`^[a-z_]+$`).MatchString(key) {
+			defined[key] = true
+		}
+	}
+	if len(defined) < 10 {
+		t.Fatalf("ICONS table holds %d entries; expected the UI's glyph set", len(defined))
+	}
+
+	for _, call := range regexp.MustCompile(`ic\(([^)]*)\)`).FindAllStringSubmatch(js, -1) {
+		name := regexp.MustCompile(`'([a-z_]+)'`).FindStringSubmatch(call[1])
+		if name != nil && !defined[name[1]] {
+			t.Errorf("app.js draws ic(%q), which ICONS does not define", name[1])
+		}
+	}
+	for _, name := range regexp.MustCompile(`data-icon="([a-z_]+)"`).FindAllStringSubmatch(html, -1) {
+		if !defined[name[1]] {
+			t.Errorf("index.html asks for data-icon %q, which ICONS does not define", name[1])
+		}
+	}
+	for key := range defined {
+		if strings.Contains(rest, "'"+key+"'") || strings.Contains(rest, "'ic:"+key+"'") ||
+			strings.Contains(html, `data-icon="`+key+`"`) {
+			continue
+		}
+		t.Errorf("ICONS defines %q, which nothing draws", key)
+	}
+}
+
+func readUI(t *testing.T, name string) string {
+	t.Helper()
+	b, err := fs.ReadFile(uiFS, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// TestSummaryFiguresMatchTheTileFilters: the state chips offer one chip per filter in app.js's
+// TILES table, and a chip carries the key both the click handler and the counts read from it.
+func TestSummaryFiguresMatchTheTileFilters(t *testing.T) {
+	html := readUI(t, "ui/index.html")
+	js := readUI(t, "ui/app.js")
+
+	start := strings.Index(js, "const TILES = {")
+	if start < 0 {
+		t.Fatal("TILES table not found in app.js")
+	}
+	table := js[start:]
+	table = table[:strings.Index(table, "};")]
+
+	filters := 0
+	for _, line := range strings.Split(table, "\n") {
+		key, _, found := strings.Cut(strings.TrimSpace(line), ":")
+		if found && regexp.MustCompile(`^[a-z]+$`).MatchString(key) {
+			filters++
+			if !strings.Contains(html, `data-tile="`+key+`"`) {
+				t.Errorf("index.html has no state chip for the %q filter", key)
+			}
+		}
+	}
+	if filters < 2 {
+		t.Fatalf("TILES holds %d filters; expected the summary's set", filters)
+	}
+	for _, m := range regexp.MustCompile(`data-tile="([a-z]*)"`).FindAllStringSubmatch(html, -1) {
+		if m[1] == "" || strings.Contains(table, "\n  "+m[1]+": ") {
+			continue // an empty key would clear the filter instead of naming one
+		}
+		t.Errorf("index.html offers the %q chip, which TILES does not filter by", m[1])
+	}
+}
+
 // TestDashboardKnowsEveryErrorKind keeps app.js ERROR_KINDS in step with internal/errkind.
 func TestDashboardKnowsEveryErrorKind(t *testing.T) {
 	js, err := fs.ReadFile(uiFS, "ui/app.js")
@@ -226,5 +363,21 @@ func TestDashboardKnowsEveryErrorKind(t *testing.T) {
 		if !strings.Contains(table, "\n  "+string(k)+": [") {
 			t.Errorf("app.js ERROR_KINDS has no entry for %q", k)
 		}
+	}
+}
+
+// TestDashboardElementsMatchThePage: app.js drives the page by element id, and one id index.html does not define is a
+// blank dashboard with nothing in the log to say why.
+func TestDashboardElementsMatchThePage(t *testing.T) {
+	js, html := readUI(t, "ui/app.js"), readUI(t, "ui/index.html")
+	asked := 0
+	for _, m := range regexp.MustCompile(`\$\('([a-z-]+)'\)`).FindAllStringSubmatch(js, -1) {
+		asked++
+		if !strings.Contains(html, `id="`+m[1]+`"`) {
+			t.Errorf("app.js asks for id %q, which index.html does not define", m[1])
+		}
+	}
+	if asked < 10 {
+		t.Fatalf("app.js asks for %d ids; expected the dashboard's set", asked)
 	}
 }
