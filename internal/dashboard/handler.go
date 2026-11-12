@@ -42,8 +42,8 @@ type Handler struct {
 
 // RegisterRoutes wires the dashboard endpoints onto the mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /{$}", serveUI("index.html"))
-	mux.HandleFunc("GET /favicon.svg", serveUI("favicon.svg"))
+	mux.Handle("GET /{$}", cached("no-store", serveUI("index.html")))
+	mux.Handle("GET /favicon.svg", cached("no-store", serveUI("favicon.svg")))
 	mux.Handle("GET /api/results", cached("no-store", http.HandlerFunc(h.results)))
 	mux.Handle("GET /api/status", cached("no-store", http.HandlerFunc(h.status)))
 	mux.HandleFunc("POST /api/scan/trigger", h.trigger)

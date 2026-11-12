@@ -172,6 +172,15 @@ func TestAPIResponsesAreNotCacheable(t *testing.T) {
 	}
 }
 
+// TestUIResponsesAreNotCacheable: a proxy in front of the Service must not answer the page or its icon from cache either.
+func TestUIResponsesAreNotCacheable(t *testing.T) {
+	for _, path := range []string{"/", "/favicon.svg"} {
+		if cc := get(newTestMux(report.Snapshot{}, fakeTrigger{}), http.MethodGet, path).Header().Get("Cache-Control"); cc != "no-store" {
+			t.Errorf("%s Cache-Control = %q, want no-store", path, cc)
+		}
+	}
+}
+
 // TestDashboardShowsTheScanTime: a stored dependency's checked_at only moves when that reference changes, so it cannot say when the scan ran.
 func TestDashboardShowsTheScanTime(t *testing.T) {
 	js, err := fs.ReadFile(uiFS, "ui/app.js")
