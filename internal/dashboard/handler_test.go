@@ -365,3 +365,19 @@ func TestDashboardKnowsEveryErrorKind(t *testing.T) {
 		}
 	}
 }
+
+// TestDashboardElementsMatchThePage: app.js drives the page by element id, and one id index.html does not define is a
+// blank dashboard with nothing in the log to say why.
+func TestDashboardElementsMatchThePage(t *testing.T) {
+	js, html := readUI(t, "ui/app.js"), readUI(t, "ui/index.html")
+	asked := 0
+	for _, m := range regexp.MustCompile(`\$\('([a-z-]+)'\)`).FindAllStringSubmatch(js, -1) {
+		asked++
+		if !strings.Contains(html, `id="`+m[1]+`"`) {
+			t.Errorf("app.js asks for id %q, which index.html does not define", m[1])
+		}
+	}
+	if asked < 10 {
+		t.Fatalf("app.js asks for %d ids; expected the dashboard's set", asked)
+	}
+}
