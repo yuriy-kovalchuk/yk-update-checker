@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **The page reflows for narrow screens**: below 900px the nav drawer becomes one row of filters above the content — a two-button view toggle (icon-only on phones), the repository picker and a reference-kind picker with counts standing in for the kind links, with Metrics left to the desktop drawer; the state chips wrap; below 640px the app bar stays one line, the title and Scan now share a row, each dependency row stacks into status with its chips, reference and versions, and buttons grow to 40px with their keyboard hints hidden. Checked at 1440, 820, 390 and 320 CSS px with no horizontal page scroll
 - **The footer is gone**: it repeated the last-scan time (in the page header) and the version (in the app bar), plus the 45s poll interval; the header's last-scan time now refreshes on every render instead
 - **Typography and icons**: Roboto for UI text, Roboto Mono for versions, digests and timestamps, both vendored as variable fonts (73 KB, OFL 1.1); every glyph is an inline SVG Material icon held in one table in `app.js`, so the JetBrains Mono Nerd Font subset is gone (−214 KB) and no icon can render as a tofu box. CNCF logos are drawn monochrome by a CSS filter, which is also what lets the white Helm mark survive a light card. `docs/assets/Dashboard.png` was regenerated
+- **Toolchain**: Go 1.27.3 → 1.27.4 (`go.mod`, Dockerfile builder `golang:1.27.4-alpine`), which closes `GO-2026-6859` (`net/http`: HTTP/1 server crash on a `MaxBytesReader` header race)
+
+### Fixed
+- **A hung clone could outlive `scan_timeout` by minutes**: killing `git` at the deadline left its helper (`git-remote-https`) holding the output pipe, and the call waited for that pipe — up to git's own ~75s connection timeout per repository — so the deadline was only reported, not enforced. `internal/gitsync` now cuts the wait 2s after git is gone (`Cmd.WaitDelay`), which puts `scan_timeout` back as the wall-clock limit the CronJob's `activeDeadlineSeconds` assumes
+- **The page itself could be served from a cache**: `GET /` and `GET /favicon.svg` now answer `Cache-Control: no-store` like the API, so an ingress cannot hold an old dashboard (and its version chip) in place of a new one
+- **Scan now offered itself before the scanner was known**: the button was visible from page load and only hidden once `/api/status` answered, so clicking it in that moment produced a `503` toast instead of no button at all
 
 ## [0.4.3] - 2026-10-31
 
