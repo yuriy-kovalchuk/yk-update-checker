@@ -39,7 +39,7 @@ Single binary (`update-checker`) with two commands (plus `version`):
 1. `report.NewPoller(backend)` re-reads the backend every 5s; `Snapshot()` feeds the UI, the API and the metrics collector
 2. On manual trigger: `POST /api/scan/trigger` → `Trigger.Trigger()` → a Job copied from the scanner CronJob (kubernetes) or a child `scan` process (local)
 3. Scanner (CronJob / Job / child process): `Runner.Run` with `OnRepo` → `report.Writer.Repo` per repository as it finishes. A repo whose scan failed keeps its previous `Dependency` objects and its `RepositoryScan` gets `phase: Failed` + the error kind; a scan that hit `scan_timeout` records every repository it did not reach as failed
-4. Dashboard: `GET /api/results` + `GET /api/status` render the UI, both `Cache-Control: no-store` so no proxy answers a poll from cache (also `GET /`, `GET /favicon.svg`, `GET /assets/`, `GET /fonts/`)
+4. Dashboard: `GET /api/results` + `GET /api/status` render the UI, `Cache-Control: no-store` so no proxy answers a poll from cache (as do `GET /` and `GET /favicon.svg`; `/assets/` is `no-cache`, `/fonts/` is `max-age=604800, immutable`)
 5. Metrics: `/metrics` is served by every replica but only the leader exports the result metrics (local: always leader)
 
 ## Design Decisions
@@ -65,7 +65,8 @@ Open (features, not defects):
 
 - extraction misses `Chart.lock`, `sourceRef.kind: GitRepository|Bucket`, `HelmRelease.spec.values.image.*` and `dependencies[].alias`;
 - `UpdateCheckerOutdatedDependency*` rules fire for as long as a dependency is outdated: there is no ack/silence concept;
-- `/api/status` cannot say "the reports are not current" (planned with the scan-history feature).
+- `/api/status` cannot say "the reports are not current" (planned with the scan-history feature);
+- a `git` killed at its deadline leaves `git-remote-https` running until its own network timeout — nothing waits for it any more (`Cmd.WaitDelay`), but the process group is not killed (`docs/architecture.md` → "What each git subprocess is allowed to do");
 
 Config loading is deliberately asymmetric: an unrecognised key warns with its exact
 path (`repos[0].auth.existingSecret`) and still loads, because a config written for a newer image

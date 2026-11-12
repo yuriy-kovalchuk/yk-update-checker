@@ -335,11 +335,13 @@ platform, not to the app. What that means in practice:
 - **Anything that can reach the Service can use it fully.** `GET /api/results` and
   `GET /api/status` disclose internal repo names, file paths and the image
   inventory, and `POST /api/scan/trigger` starts a scan (a Job copied from the
-  scanner CronJob — never a caller-supplied spec). Both `GET` endpoints answer
-  `Cache-Control: no-store`, so no proxy in front of the dashboard may reply to a
-  poll from cache. `/metrics` is likewise open to
-  whoever can reach it. The chart ships a plain `ClusterIP` Service and **no
-  `NetworkPolicy`**, so every pod in the cluster qualifies as "can reach it".
+  scanner CronJob — never a caller-supplied spec). The two API `GET`s, the page
+  itself and `/favicon.svg` answer `Cache-Control: no-store`, so no proxy in front
+  of the dashboard may answer a poll — or a page load — from cache; `/assets/`
+  answers `no-cache` (revalidate on every load) and `/fonts/` may be cached for a
+  week. `/metrics` is likewise open to whoever can reach it. The chart ships a
+  plain `ClusterIP` Service and **no `NetworkPolicy`**, so every pod in the cluster
+  qualifies as "can reach it".
   Replacing the reports is *not* part of that surface: writing them needs
   Kubernetes API access, which RBAC controls.
 - **Outbound requests are named by the repositories being scanned.** Git remotes,
@@ -480,6 +482,16 @@ That measurement also corrects an earlier assumption: the
 "header is replayed to every redirect target" claim does not hold on the git
 version this project pins. The part that *was* real is the plaintext transport, and
 that is now refused at load time.
+
+A call is bounded by a deadline as well (`RunnerOptions.GitCommandTimeout`, default
+`DefaultCommandTimeout` 5m, while `scan_timeout` bounds the whole scan), and the
+process is killed at it. Killing git does not end the wait: git leaves
+`git-remote-https` behind still holding the output pipe, so reading the command's
+output returned only once that helper exited — git's own ~75s connection timeout,
+which is how a scan came to outlive `scan_timeout` by minutes. `Cmd.WaitDelay`
+(`outputDrainTimeout`, 2s) ends the wait when git is gone; the helper itself is
+still left running until its network gives up, because the process group is not
+killed.
 
 Log output goes through `gitsync.RedactURL` (`syncing repo url=…`), because the repo URL is
 logged on every scan.
