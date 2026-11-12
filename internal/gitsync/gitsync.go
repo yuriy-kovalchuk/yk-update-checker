@@ -20,6 +20,9 @@ import (
 // DefaultCommandTimeout bounds one git subprocess (clone, fetch, set-url).
 const DefaultCommandTimeout = 5 * time.Minute
 
+// outputDrainTimeout is how long a git helper (git-remote-https) may keep the output pipe open after git is gone, past which a deadline stops being a limit.
+const outputDrainTimeout = 2 * time.Second
+
 // Syncer brings a local checkout of a repository up to date.
 type Syncer struct {
 	commandTimeout time.Duration // 0 = no per-command limit
@@ -70,6 +73,7 @@ func (s *Syncer) git(ctx context.Context, env []string, args ...string) error {
 	}
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Env = env
+	cmd.WaitDelay = outputDrainTimeout
 	if out, err := cmd.CombinedOutput(); err != nil {
 		sub := args[0]
 		if sub == "-C" {
